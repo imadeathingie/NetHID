@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "tabs": [
+    {
+      "id": "builtin_system",
+      "name": "System",
+      "panels": [
+        {
+          "title": "POWER",
+          "buttons": [
+            {
+              "label": "Sleep",
+              "chains": [
+                {
+                  "os": "windows",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 8,
+                      "key": 27
+                    },
+                    {
+                      "t": "delay",
+                      "ms": 400
+                    },
+                    {
+                      "t": "key",
+                      "mod": 0,
+                      "key": 24
+                    },
+                    {
+                      "t": "delay",
+                      "ms": 250
+                    },
+                    {
+                      "t": "key",
+                      "mod": 0,
+                      "key": 22
+                    }
+                  ]
+                },
+                {
+                  "os": "mac",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 12,
+                      "key": 102
+                    }
+                  ]
+                },
+                {
+                  "os": "linux",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 8,
+                      "key": 15
+                    }
+                  ]
+                }
+              ],
+              "faIcon": "fa-solid fa-moon"
+            },
+            {
+              "label": "Lock",
+              "chains": [
+                {
+                  "os": "windows",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 8,
+                      "key": 15
+                    }
+                  ]
+                },
+                {
+                  "os": "mac",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 9,
+                      "key": 20
+                    }
+                  ]
+                },
+                {
+                  "os": "linux",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 8,
+                      "key": 15
+                    }
+                  ]
+                }
+              ],
+              "faIcon": "fa-solid fa-lock"
+            }
+          ]
+        },
+        {
+          "title": "CAPTURE",
+          "buttons": [
+            {
+              "label": "Screenshot",
+              "chains": [
+                {
+                  "os": "windows",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 0,
+                      "key": 70
+                    }
+                  ]
+                },
+                {
+                  "os": "mac",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 10,
+                      "key": 32
+                    }
+                  ]
+                },
+                {
+                  "os": "linux",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "mod": 0,
+                      "key": 70
+                    }
+                  ]
+                }
+              ],
+              "faIcon": "fa-solid fa-camera"
+            }
+          ]
+        },
+        {
+          "title": "CLIPBOARD",
+          "buttons": [
+            {
+              "label": "Copy",
+              "chains": [
+                {
+                  "os": "all",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "key": 6,
+                      "mod": 1,
+                      "modByOs": {
+                        "windows": 1,
+                        "mac": 8,
+                        "linux": 1
+                      }
+                    }
+                  ]
+                }
+              ],
+              "faIcon": "fa-solid fa-copy"
+            },
+            {
+              "label": "Paste",
+              "chains": [
+                {
+                  "os": "all",
+                  "steps": [
+                    {
+                      "t": "key",
+                      "key": 25,
+                      "mod": 1,
+                      "modByOs": {
+                        "windows": 1,
+                        "mac": 8,
+                        "linux": 1
+                      }
+                    }
+                  ]
+                }
+              ],
+              "faIcon": "fa-solid fa-paste"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

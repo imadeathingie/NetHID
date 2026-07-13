@@ -1,0 +1,148 @@
+{
+  "version": 1,
+  "tabs": [
+    {
+      "id": "builtin_macros",
+      "name": "Macros",
+      "panels": [
+        {
+          "title": "SHORTCUTS",
+          "buttons": [
+            {
+              "label": "Ctrl+C",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 6
+                }
+              ],
+              "faIcon": "fa-solid fa-copy"
+            },
+            {
+              "label": "Ctrl+V",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 25
+                }
+              ],
+              "faIcon": "fa-solid fa-paste"
+            },
+            {
+              "label": "Ctrl+X",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 27
+                }
+              ],
+              "faIcon": "fa-solid fa-scissors"
+            },
+            {
+              "label": "Ctrl+Z",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 28
+                }
+              ],
+              "faIcon": "fa-solid fa-rotate-left"
+            },
+            {
+              "label": "Ctrl+A",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 4
+                }
+              ],
+              "faIcon": "fa-solid fa-object-group"
+            },
+            {
+              "label": "Ctrl+S",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 22
+                }
+              ],
+              "faIcon": "fa-solid fa-floppy-disk"
+            },
+            {
+              "label": "Ctrl+F",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 9
+                }
+              ],
+              "faIcon": "fa-solid fa-magnifying-glass"
+            },
+            {
+              "label": "Alt+F4",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 4,
+                  "key": 61
+                }
+              ],
+              "faIcon": "fa-solid fa-xmark"
+            },
+            {
+              "label": "Win+D",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 8,
+                  "key": 7
+                }
+              ],
+              "faIcon": "fa-solid fa-desktop"
+            },
+            {
+              "label": "Win+L",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 8,
+                  "key": 15
+                }
+              ],
+              "faIcon": "fa-solid fa-lock"
+            },
+            {
+              "label": "PrtScn",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 70
+                }
+              ],
+              "faIcon": "fa-solid fa-camera"
+            },
+            {
+              "label": "SLEEP",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 72
+                }
+              ],
+              "faIcon": "fa-solid fa-moon"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

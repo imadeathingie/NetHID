@@ -1,0 +1,2907 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>NetHID</title>
+<link rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+<style>
+  :root {
+    --bg: #0d0d0f; --surface: #18181c; --surface2: #222228;
+    --accent: #7c6af7; --accent2: #f76aad; --text: #e8e8f0;
+    --text-dim: #6b6b80; --key-bg: #222228; --key-active: #7c6af7;
+    --key-border: #35354a; --radius: 8px; --font: 'Courier New', monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text); font-family: var(--font);
+    min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; padding: 12px; gap: 12px; overscroll-behavior: none;
+  }
+  header {
+    width: 100%; max-width: 740px; display: flex; align-items: center;
+    justify-content: space-between; padding: 8px 0;
+    border-bottom: 1px solid var(--key-border);
+  }
+  .logo { font-size: 1.1rem; letter-spacing: 0.15em; color: var(--accent); font-weight: bold; }
+  .logo span { color: var(--accent2); }
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .status { font-size: 0.72rem; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #3a3a50; transition: background 0.3s; }
+  .dot.ok { background: #4ade80; } .dot.err { background: #f87171; }
+  .logout-btn {
+    background: none; border: 1px solid var(--key-border); border-radius: 6px;
+    color: var(--text-dim); font-family: var(--font); font-size: 0.68rem;
+    padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .logout-btn:hover { border-color: #e05260; color: #e05260; }
+  .wake-btn {
+    background: none; border: 1px solid var(--key-border); border-radius: 6px;
+    color: var(--text-dim); font-family: var(--font); font-size: 0.68rem;
+    padding: 4px 10px; cursor: pointer; letter-spacing: 0.05em;
+    margin-right: 6px; transition: border-color 0.15s, color 0.15s;
+  }
+  .wake-btn:hover { border-color: #4caa6e; color: #4caa6e; }
+  .tabs { display: flex; gap: 4px; width: 100%; max-width: 740px; flex-wrap: wrap; }
+  .tab {
+    flex: 1; padding: 8px; text-align: center; font-size: 0.8rem;
+    background: var(--surface); border: 1px solid var(--key-border);
+    border-radius: var(--radius); cursor: pointer; color: var(--text-dim);
+    letter-spacing: 0.08em; transition: all 0.15s;
+  }
+  .tab.active { background: var(--surface2); border-color: var(--accent); color: var(--accent); }
+  .panel { display: none; width: 100%; max-width: 740px; }
+  .panel.active { display: flex; flex-direction: column; gap: 10px; }
+  .irdb-frame { width:100%; height:72vh; min-height:460px; border:1px solid var(--key-border);
+                border-radius:var(--radius); background:var(--bg); }
+  .text-row { display: flex; gap: 8px; }
+  #textInput {
+    flex: 1; background: var(--surface2); border: 1px solid var(--key-border);
+    border-radius: var(--radius); color: var(--text); font-family: var(--font);
+    font-size: 0.9rem; padding: 10px 12px; outline: none; transition: border-color 0.15s;
+  }
+  #textInput:focus { border-color: var(--accent); }
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: var(--radius);
+    padding: 10px 18px; font-family: var(--font); font-size: 0.85rem; cursor: pointer;
+    letter-spacing: 0.05em; transition: opacity 0.15s, transform 0.1s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .btn:active { opacity: 0.75; transform: scale(0.97); }
+  .btn.ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--key-border); }
+  .keyboard { display: flex; flex-direction: column; gap: 5px; }
+  .kb-row { display: flex; gap: 4px; justify-content: center; }
+  .key {
+    display: flex; align-items: center; justify-content: center;
+    background: var(--key-bg); border: 1px solid var(--key-border);
+    border-radius: 6px; color: var(--text); font-family: var(--font);
+    font-size: 0.75rem; height: 40px; min-width: 34px; padding: 0 6px;
+    cursor: pointer; transition: background 0.08s, border-color 0.08s, transform 0.08s;
+    user-select: none; -webkit-user-select: none; touch-action: none; position: relative;
+  }
+  .key:active, .key.pressed { background: var(--key-active); border-color: var(--accent); transform: scale(0.94); }
+  .key.mod-active  { background: var(--surface2); border-color: var(--accent2); color: var(--accent2); }
+  .key.mod-sticky  { background: var(--surface2); border-color: var(--accent);  color: var(--accent);  }
+  .key.wide-1-5 { min-width: 52px; flex: 1.5; max-width: 72px; }
+  .key.wide-2   { min-width: 68px; flex: 2;   max-width: 96px; }
+  .key.wide-2-5 { min-width: 84px; flex: 2.5; max-width: 120px; }
+  .key.wide-6   { flex: 6; max-width: 260px; }
+  .fn-row .key  { font-size: 0.65rem; height: 32px; min-width: 28px; }
+  .fn2-row .key { font-size: 0.62rem; height: 28px; min-width: 28px; }
+  .sys-row { border-top: 1px solid var(--key-border); padding-top: 4px; margin-top: 2px; }
+  .sys-row .key { font-size: 0.62rem; height: 30px; color: var(--text-dim); }
+  .macro-grid{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .macro-btn {
+    background: var(--surface2); border: 1px solid var(--key-border);
+    border-radius: var(--radius); color: var(--text); font-family: var(--font);
+    font-size: 0.72rem; padding: 10px 4px; text-align: center; cursor: pointer;
+    transition: background 0.12s, border-color 0.12s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .macro-btn:active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .trackpad-wrap { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .mouse-mode-row { display: flex; gap: 8px; width: 100%; max-width: 500px; }
+  .mode-btn {
+    flex: 1; height: 38px; background: var(--surface); border: 1px solid var(--key-border);
+    border-radius: 10px; color: var(--text-dim); font-family: var(--font);
+    font-size: 0.78rem; letter-spacing: 0.08em; cursor: pointer; transition: all .15s;
+  }
+  .mode-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .mouse-hint { color: var(--text-dim); font-size: 0.7rem; text-align: center; max-width: 500px; }
+  #trackpad {
+    width: 100%; max-width: 500px; height: 200px; background: var(--surface);
+    border: 1px solid var(--key-border); border-radius: 14px; touch-action: none;
+    cursor: crosshair; position: relative; overflow: hidden;
+  }
+  #trackpad::after {
+    content: 'TRACKPAD'; position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%,-50%); color: var(--text-dim);
+    font-size: 0.65rem; letter-spacing: 0.2em; pointer-events: none;
+  }
+  #trackpad.active { border-color: var(--accent); }
+  .mouse-btns { display: flex; gap: 8px; width: 100%; max-width: 500px; }
+  .mbtn {
+    flex: 1; height: 46px; background: var(--surface); border: 1px solid var(--key-border);
+    border-radius: 10px; color: var(--text); font-family: var(--font);
+    font-size: 0.78rem; cursor: pointer; transition: background 0.1s, border-color 0.1s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .mbtn:active { background: var(--surface2); border-color: var(--accent); color: var(--accent); }
+  .scroll-row { display: flex; gap: 8px; width: 100%; max-width: 500px; }
+  .scroll-row .btn { flex: 1; }
+  .slider-row {
+    display: flex; align-items: center; gap: 10px; width: 100%;
+    max-width: 500px; font-size: 0.75rem; color: var(--text-dim);
+  }
+  input[type=range] { flex: 1; accent-color: var(--accent); }
+  #log {
+    width: 100%; max-width: 740px; height: 80px; background: var(--surface);
+    border: 1px solid var(--key-border); border-radius: var(--radius);
+    font-size: 0.7rem; color: var(--text-dim); padding: 8px;
+    overflow-y: auto; font-family: var(--font);
+  }
+  .log-ok { color: #4ade80; } .log-err { color: #f87171; } .log-info { color: var(--accent); }
+
+  /* ── Session-expired overlay ── */
+  #lock-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(13,13,15,0.92); backdrop-filter: blur(6px);
+    z-index: 100; align-items: center; justify-content: center;
+  }
+  #lock-overlay.visible { display: flex; }
+  .lock-card {
+    background: var(--surface); border: 1px solid var(--key-border);
+    border-radius: 14px; padding: 36px 32px; width: 300px;
+    display: flex; flex-direction: column; gap: 16px; align-items: center;
+  }
+  .lock-title { font-size: 1rem; color: var(--accent); letter-spacing: 0.1em; }
+  .lock-sub   { font-size: 0.75rem; color: var(--text-dim); text-align: center; }
+  .lock-err   { font-size: 0.75rem; color: #f87171; display: none; }
+  #lock-pw {
+    width: 100%; background: var(--surface2); border: 1px solid var(--key-border);
+    border-radius: var(--radius); color: var(--text); font-family: var(--font);
+    font-size: 0.9rem; padding: 10px; outline: none; transition: border-color 0.15s;
+    letter-spacing: 0.1em;
+  }
+  #lock-pw:focus { border-color: var(--accent); }
+
+  /* ── Media Panel ───────────────────────────────────────── */
+
+.media-panel {
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.media-card {
+  background: var(--surface);
+  border:1px solid var(--key-border);
+  border-radius:12px;
+  padding:12px;
+}
+
+.media-title {
+  color:var(--accent);
+  font-size:0.72rem;
+  letter-spacing:0.12em;
+  margin-bottom:10px;
+}
+
+.media-search {
+  display:flex;
+  gap:8px;
+}
+
+.media-search input {
+  flex:1;
+  background:var(--surface2);
+  border:1px solid var(--key-border);
+  border-radius:8px;
+  color:var(--text);
+  padding:10px;
+  font-family:var(--font);
+}
+
+.nav-skip-row {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-bottom:8px;
+}
+.nav-skip-row .btn { flex:1; }
+.nav-skip-row input[type=number] {
+  width:56px;
+  background:var(--surface2);
+  border:1px solid var(--key-border);
+  border-radius:8px;
+  color:var(--text);
+  font-family:var(--font);
+  font-size:0.9rem;
+  text-align:center;
+  padding:8px 4px;
+}
+.nav-skip-unit { color:var(--text-dim); font-size:0.7rem; letter-spacing:0.05em; }
+.nav-group {
+  border:1px solid var(--key-border);
+  border-radius:10px;
+  padding:8px;
+  margin-bottom:8px;
+}
+.nav-group-header {
+  text-align:center;
+  color:var(--text-dim);
+  font-size:0.7rem;
+  letter-spacing:0.08em;
+  margin-bottom:8px;
+}
+.nav-group-header input[type=number] {
+  width:48px;
+  background:var(--surface2);
+  border:1px solid var(--key-border);
+  border-radius:6px;
+  color:var(--text);
+  font-family:var(--font);
+  font-size:0.85rem;
+  text-align:center;
+  padding:3px 2px;
+  margin:0 4px;
+}
+.media-controls {
+  display:grid;
+  gap:8px;
+}
+
+
+.col-3 { grid-template-columns:repeat(3,1fr); }
+.col-4 { grid-template-columns:repeat(4,1fr); }
+.col-5 { grid-template-columns:repeat(5,1fr); }
+
+.media-btn {
+  background:var(--surface2);
+  border:1px solid var(--key-border);
+  border-radius:10px;
+  color:var(--text);
+  padding:10px 4px;
+  cursor:pointer;
+  transition:all .15s;
+}
+
+.media-btn:active {
+  background:var(--accent);
+  border-color:var(--accent);
+}
+
+.media-icon {
+  display:block;
+  font-size:1.3rem;
+}
+
+.media-label {
+  display:block;
+  margin-top:4px;
+  font-size:0.6rem;
+  color:var(--text-dim);
+}
+
+.seek-wrap {
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+
+.seek-header {
+  display:flex;
+  justify-content:space-between;
+  color:var(--text-dim);
+  font-size:0.7rem;
+}
+
+#seekSlider {
+  width:100%;
+  accent-color:var(--accent);
+}
+/* Custom tabs + editor */
+.tab-custom-add { opacity:0.75; border-style:dashed; }
+.ce-toolbar { display:flex; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
+.ce-secondary { background:var(--surface2); }
+.ce-hint { color:var(--text-dim); font-size:0.8rem; line-height:1.5; padding:8px 2px; }
+.ce-tab {
+  border:1px solid var(--key-border); border-radius:10px;
+  padding:10px; margin-bottom:12px; background:var(--surface);
+}
+.ce-panel {
+  border:1px solid var(--key-border); border-radius:8px;
+  padding:8px; margin:8px 0; background:var(--surface2);
+}
+.ce-btn {
+  border:1px dashed var(--key-border); border-radius:8px;
+  padding:8px; margin:8px 0;
+}
+.ce-row { display:flex; gap:6px; align-items:center; margin-bottom:6px; }
+.ce-name {
+  flex:1; background:var(--surface); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text); font-family:var(--font);
+  font-size:0.85rem; padding:6px 8px;
+}
+.ce-step {
+  display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+  font-size:0.75rem; color:var(--text-dim);
+  padding:5px; margin:4px 0; background:var(--surface);
+  border-radius:6px;
+}
+.ce-stepsel, .ce-stepin, .ce-stepnum {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text); font-family:var(--font);
+  font-size:0.8rem; padding:4px 6px;
+}
+.ce-stepin { flex:1; min-width:80px; }
+.ce-stepnum { width:70px; }
+.ce-mod { display:inline-flex; align-items:center; gap:2px; font-size:0.72rem; }
+.ce-mod input { margin:0; }
+.ce-steprow { display:flex; gap:4px; flex-wrap:wrap; margin-top:4px; }
+.ce-chain {
+  border:1px solid var(--key-border); border-radius:8px;
+  padding:6px 8px; margin:6px 0; background:rgba(255,255,255,0.02);
+}
+.ce-sig { display:flex; flex-direction:column; gap:4px; width:100%; }
+.ce-sigta {
+  flex:1; min-height:48px; background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text); font-family:var(--mono,monospace);
+  font-size:0.72rem; padding:5px 7px; resize:vertical; width:100%;
+}
+.ce-chainhead { margin-bottom:4px; }
+.ce-addchain { margin-top:6px; }
+.ce-scoperow { margin-top:4px; }
+.ce-varsel {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text); font-family:var(--font);
+  font-size:0.76rem; padding:4px 6px;
+}
+.ce-add {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text-dim); font-family:var(--font);
+  font-size:0.72rem; padding:5px 8px; cursor:pointer;
+}
+.ce-add:hover { color:var(--accent); border-color:var(--accent); }
+.ce-x {
+  background:none; border:1px solid var(--key-border); border-radius:6px;
+  color:var(--text-dim); font-family:var(--font); font-size:0.7rem;
+  padding:3px 7px; cursor:pointer;
+}
+.ce-x:hover { color:#e05260; border-color:#e05260; }
+/* Per-card search box on rendered custom panels */
+.cu-search { margin-bottom:8px; }
+.cu-search input {
+  width:100%; box-sizing:border-box;
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:8px; color:var(--text); font-family:var(--font);
+  font-size:0.9rem; padding:8px 10px;
+}
+/* Custom button icon + label stacking */
+.macro-btn .cu-btn-icon { display:block; line-height:0; margin-bottom:3px; color:var(--text); }
+.macro-btn .cu-btn-label { display:block; font-size:0.7rem; }
+/* Editor: icon picker + search-row + search-step note */
+.ce-iconsel {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text); font-family:var(--font);
+  font-size:0.78rem; padding:5px 4px; max-width:96px;
+}
+.ce-searchrow { margin-top:2px; }
+.ce-searchstep { color:var(--accent); font-size:0.75rem; }
+/* Collapsible editor headers */
+.ce-head { display:flex; align-items:center; gap:6px; }
+.ce-caret {
+  background:none; border:none; color:var(--text-dim); cursor:pointer;
+  font-size:0.8rem; padding:2px 4px; min-width:20px;
+}
+.ce-count { color:var(--text-dim); font-size:0.7rem; white-space:nowrap; }
+.ce-mini {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text-dim); font-family:var(--font);
+  font-size:0.68rem; padding:3px 7px; cursor:pointer; white-space:nowrap;
+}
+.ce-mini:hover { color:var(--accent); border-color:var(--accent); }
+.ce-move {
+  background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:6px; color:var(--text-dim); font-family:var(--font);
+  font-size:0.62rem; padding:3px 6px; cursor:pointer; line-height:1;
+}
+.ce-move:hover:not(:disabled) { color:var(--accent); border-color:var(--accent); }
+.ce-move:disabled { opacity:0.3; cursor:default; }
+.ce-tabbody { margin-top:8px; }
+.ce-fieldlbl { color:var(--text-dim); font-size:0.7rem; min-width:54px; }
+/* Per-OS key/combo step layout */
+.ce-keystep { display:flex; flex-direction:column; gap:4px; width:100%; }
+.ce-keyhead { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.ce-steptype { color:var(--text-dim); font-size:0.72rem; min-width:42px; }
+.ce-osmod {
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+  padding:3px 6px; border:1px solid transparent; border-radius:6px;
+}
+.ce-osmod-active { border-color:var(--accent); background:rgba(124,106,247,0.08); }
+.ce-osmodlbl { color:var(--text-dim); font-size:0.68rem; min-width:36px; }
+/* OS selector bar in the editor */
+/* Header cog / settings button */
+.cog-btn {
+  background:none; border:1px solid var(--key-border); border-radius:8px;
+  color:var(--text-dim); cursor:pointer; padding:5px 7px; line-height:0;
+  display:inline-flex; align-items:center; transition:all .15s;
+}
+.cog-btn:hover { color:var(--accent); border-color:var(--accent); }
+/* Settings overlay (modeled on the lock overlay) */
+#settings-overlay {
+  display:none; position:fixed; inset:0;
+  background:rgba(13,13,15,0.92); backdrop-filter:blur(6px);
+  z-index:100; align-items:center; justify-content:center;
+}
+#settings-overlay.visible { display:flex; }
+.settings-switch { display:flex; align-items:center; gap:8px; color:var(--text); font-size:0.85rem; cursor:pointer; }
+.settings-switch input { width:18px; height:18px; cursor:pointer; }
+.settings-card {
+  background:var(--surface); border:1px solid var(--key-border);
+  border-radius:14px; padding:24px; width:320px; max-width:90vw;
+  display:flex; flex-direction:column; gap:14px;
+}
+.settings-head { display:flex; align-items:center; justify-content:space-between; }
+.settings-row { display:flex; align-items:center; gap:10px; }
+.settings-label { font-size:0.85rem; color:var(--text); min-width:70px; }
+.settings-row select {
+  flex:1; background:var(--surface2); border:1px solid var(--key-border);
+  border-radius:8px; color:var(--text); font-family:var(--font);
+  font-size:0.9rem; padding:8px 10px;
+}
+.settings-hint { font-size:0.72rem; color:var(--text-dim); line-height:1.5; }
+</style>
+</head>
+<body>
+
+<!-- Session-expired lock overlay -->
+<div id="lock-overlay">
+  <div class="lock-card">
+    <div class="lock-title">SESSION EXPIRED</div>
+    <div class="lock-sub">Re-enter password to continue</div>
+    <div class="lock-err" id="lock-err"></div>
+    <input type="password" id="lock-pw" placeholder="Password"
+           onkeydown="if(event.key==='Enter')reauth()">
+    <button class="btn" style="width:100%" onclick="reauth()">UNLOCK</button>
+  </div>
+</div>
+
+<div id="settings-overlay" onclick="if(event.target===this)closeSettings()">
+  <div class="settings-card">
+    <div class="settings-head">
+      <div class="lock-title">SETTINGS</div>
+      <button class="ce-x" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="settings-row">
+      <div class="settings-label">Host OS</div>
+      <select id="osSelect" onchange="setOs(this.value)">
+        <option value="windows">Windows</option>
+        <option value="mac">macOS</option>
+        <option value="linux">Linux</option>
+      </select>
+    </div>
+    <div class="settings-hint" id="osDetectNote" style="display:none">✓ Windows detected via USB — using Windows. You can change this below for the current session; it'll auto-detect again on next boot.</div>
+    <div class="settings-hint">Selects which key/modifier each macro sends. Windows is auto-detected from USB on boot and used when present; otherwise your choice here (the preferred option between macOS and Linux) is used. You can override the OS any time for the current session — your macOS/Linux choice is remembered across reloads, while a Windows override re-detects on next boot.</div>
+    <div class="settings-row">
+      <div class="settings-label">Verbose log</div>
+      <label class="settings-switch">
+        <input type="checkbox" id="verboseToggle" onchange="setVerbose(this.checked)">
+        <span>log each step</span>
+      </label>
+    </div>
+    <div class="settings-hint">When on, running a macro logs one line per step (with the key/combo resolved for the current host OS) instead of just a summary.</div>
+  </div>
+</div>
+<!-- SVG sprite (place once near the top of the page) -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     style="position:absolute;width:0;height:0;overflow:hidden"
+     aria-hidden="true">
+
+  <defs>
+
+    <!-- Rewind 10s -->
+    <symbol id="icon-rewind" viewBox="0 0 24 24">
+      <path d="M11 6L5 12L11 18V6Z" fill="currentColor"/>
+      <path d="M19 6L13 12L19 18V6Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Previous -->
+    <symbol id="icon-prev" viewBox="0 0 24 24">
+      <rect x="4" y="5" width="2" height="14" fill="currentColor"/>
+      <path d="M18 6L8 12L18 18V6Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Play -->
+    <symbol id="icon-play" viewBox="0 0 24 24">
+      <path d="M8 5V19L19 12L8 5Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Fullscreen (four outward corner brackets) -->
+    <symbol id="icon-fullscreen" viewBox="0 0 24 24">
+      <path d="M4 9V4H9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M20 9V4H15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M4 15V20H9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M20 15V20H15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- Theater mode (wide outlined rectangle) -->
+    <symbol id="icon-theater" viewBox="0 0 24 24">
+      <rect x="3" y="7" width="18" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
+    </symbol>
+
+    <!-- Miniplayer (small rectangle in the lower-right of a frame) -->
+    <symbol id="icon-miniplayer" viewBox="0 0 24 24">
+      <rect x="3" y="4" width="18" height="16" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="12" y="12" width="7" height="6" rx="1" fill="currentColor"/>
+    </symbol>
+
+    <!-- Tab next (arrow to a bar on the right) -->
+    <symbol id="icon-tab-next" viewBox="0 0 24 24">
+      <path d="M4 12H14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M10 8L14 12L10 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M19 6V18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Tab prev (arrow to a bar on the left) -->
+    <symbol id="icon-tab-prev" viewBox="0 0 24 24">
+      <path d="M20 12H10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M14 8L10 12L14 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M5 6V18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Enter / return -->
+    <symbol id="icon-enter" viewBox="0 0 24 24">
+      <path d="M20 6V12H7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M11 8L7 12L11 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- Single nudge forward (one chevron right) -->
+    <symbol id="icon-nudge-fwd" viewBox="0 0 24 24">
+      <path d="M9 6L15 12L9 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- Single nudge back (one chevron left) -->
+    <symbol id="icon-nudge-back" viewBox="0 0 24 24">
+      <path d="M15 6L9 12L15 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+
+    <!-- Next -->
+    <symbol id="icon-next" viewBox="0 0 24 24">
+      <rect x="18" y="5" width="2" height="14" fill="currentColor"/>
+      <path d="M6 6L16 12L6 18V6Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Forward 10s -->
+    <symbol id="icon-forward" viewBox="0 0 24 24">
+      <path d="M5 6L11 12L5 18V6Z" fill="currentColor"/>
+      <path d="M13 6L19 12L13 18V6Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Frame Back -->
+    <symbol id="icon-frame-back" viewBox="0 0 24 24">
+      <path d="M16 5L7 12L16 19V5Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Frame Forward -->
+    <symbol id="icon-frame-forward" viewBox="0 0 24 24">
+      <path d="M8 5V19L17 12L8 5Z" fill="currentColor"/>
+    </symbol>
+
+    <!-- Slow -->
+    <symbol id="icon-rate-down" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"/>
+      <path d="M12 12L8 14"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Fast -->
+    <symbol id="icon-rate-up" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="8"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"/>
+      <path d="M12 12L16 10"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"/>
+    </symbol>
+
+    <!-- Mute -->
+    <symbol id="icon-mute" viewBox="0 0 24 24">
+      <path d="M4 10V14H8L13 18V6L8 10H4Z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linejoin="round"/>
+      <path d="M18 9L22 15"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"/>
+      <path d="M22 9L18 15"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"/>
+    </symbol>
+<symbol id="icon-volume-down" viewBox="0 0 24 24">
+  <path d="M4 10V14H8L13 18V6L8 10H4Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linejoin="round"/>
+  <path d="M16 10.5C17 11.3 17 12.7 16 13.5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"/>
+  <path d="M18.5 9C20.5 10.5 20.5 13.5 18.5 15"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        opacity="0.4"/>
+  <path d="M21 3L15 21"
+        stroke="currentColor"
+        stroke-width="2"
+        opacity="0.5"/>
+</symbol>
+
+<symbol id="icon-volume-up" viewBox="0 0 24 24">
+  <path d="M4 10V14H8L13 18V6L8 10H4Z"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linejoin="round"/>
+  <path d="M16 10.5C17 11.3 17 12.7 16 13.5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"/>
+  <path d="M18.5 8.5C20.5 10 20.5 14 18.5 15.5"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"/>
+  <path d="M21 6C23.5 8 23.5 16 21 18"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"/>
+</symbol>
+
+    <!-- General-purpose icons for custom buttons -->
+    <symbol id="icon-search" viewBox="0 0 24 24">
+      <circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M20 20L16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-star" viewBox="0 0 24 24">
+      <path d="M12 3L14.5 9L21 9.5L16 13.5L17.5 20L12 16.5L6.5 20L8 13.5L3 9.5L9.5 9Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-heart" viewBox="0 0 24 24">
+      <path d="M12 20S4 14.5 4 9C4 6 6.5 4.5 8.5 5.5C10 6.2 11.4 7.8 12 9C12.6 7.8 14 6.2 15.5 5.5C17.5 4.5 20 6 20 9C20 14.5 12 20 12 20Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-gear" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M12 2V5M12 19V22M2 12H5M19 12H22M5 5L7 7M17 17L19 19M19 5L17 7M7 17L5 19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-home" viewBox="0 0 24 24">
+      <path d="M4 11L12 4L20 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M6 10V20H18V10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-bolt" viewBox="0 0 24 24">
+      <path d="M13 2L4 14H11L10 22L20 9H12L13 2Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24">
+      <rect x="8" y="8" width="12" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M4 16V4H16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-paste" viewBox="0 0 24 24">
+      <rect x="5" y="5" width="14" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <rect x="9" y="2" width="6" height="4" rx="1" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24">
+      <path d="M12 5V19M5 12H19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-minus" viewBox="0 0 24 24">
+      <path d="M5 12H19" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24">
+      <path d="M5 12L10 17L19 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-x" viewBox="0 0 24 24">
+      <path d="M6 6L18 18M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-arrow-up" viewBox="0 0 24 24">
+      <path d="M12 19V5M6 11L12 5L18 11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-arrow-down" viewBox="0 0 24 24">
+      <path d="M12 5V19M6 13L12 19L18 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24">
+      <path d="M19 12H5M11 6L5 12L11 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-arrow-right" viewBox="0 0 24 24">
+      <path d="M5 12H19M13 6L19 12L13 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24">
+      <path d="M20 11A8 8 0 1 0 19 15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M20 5V11H14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="icon-power" viewBox="0 0 24 24">
+      <path d="M12 4V12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      <path d="M7 7A7 7 0 1 0 17 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="icon-volume" viewBox="0 0 24 24">
+      <path d="M4 9V15H8L13 19V5L8 9H4Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="icon-keyboard" viewBox="0 0 24 24">
+      <rect x="3" y="6" width="18" height="12" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+      <path d="M7 10H7.01M11 10H11.01M15 10H15.01M8 14H16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+    </symbol>
+  </defs>
+</svg>
+<header>
+  <div class="logo">NET<span>HID</span></div>
+  <div class="header-right">
+    <div class="status">
+      <div class="dot" id="statusDot"></div>
+      <span id="statusText">checking…</span>
+    </div>
+    <button class="wake-btn" onclick="wakeHost()">WAKE</button>
+    <button class="cog-btn" onclick="openSettings()" title="Settings" aria-label="Settings">
+      <svg width="18" height="18"><use href="#icon-gear"></use></svg>
+    </button>
+    <button class="logout-btn" onclick="logout()">LOCK</button>
+  </div>
+</header>
+
+<div class="tabs" id="tabBar">
+  <!-- tab buttons are built by buildTabBar() from the panels actually served -->
+</div>
+
+<!--@@TAB keyboard@@-->
+<div class="panel active" id="panel-keyboard" data-tabname="keyboard" data-tablabel="KEYBOARD">
+  <div class="text-row">
+    <input id="textInput" type="text" placeholder="Type text to send…"
+           autocomplete="off" autocorrect="off" spellcheck="false">
+    <button class="btn" onclick="sendText()">SEND</button>
+    <button class="btn ghost" onclick="document.getElementById('textInput').value=''">CLR</button>
+  </div>
+  <div class="keyboard" id="keyboard"></div>
+</div>
+
+<!--@@ENDTAB@@-->
+<!--@@TAB mouse@@-->
+<div class="panel" id="panel-mouse" data-tabname="mouse" data-tablabel="MOUSE">
+  <div class="trackpad-wrap">
+    <div class="mouse-mode-row">
+      <button class="mode-btn active" id="modeRel" onclick="setMouseMode('rel')">RELATIVE</button>
+      <button class="mode-btn" id="modeAbs" onclick="setMouseMode('abs')">ABSOLUTE</button>
+    </div>
+    <div id="trackpad"></div>
+    <div class="mouse-hint" id="mouseHint">Drag to move the cursor. Speed adjusts sensitivity.</div>
+    <div class="mouse-btns">
+      <button class="mbtn" onpointerdown="mouseClick(1)">◀ LEFT</button>
+      <button class="mbtn" onpointerdown="mouseClick(4)">MIDDLE</button>
+      <button class="mbtn" onpointerdown="mouseClick(2)">RIGHT ▶</button>
+    </div>
+    <div class="scroll-row">
+      <button class="btn ghost" onpointerdown="startScroll(-3)" onpointerup="stopScroll()" onpointerleave="stopScroll()">▲ SCROLL UP</button>
+      <button class="btn ghost" onpointerdown="startScroll(3)"  onpointerup="stopScroll()" onpointerleave="stopScroll()">▼ SCROLL DOWN</button>
+    </div>
+    <div class="slider-row" id="speedRow">
+      <span>SPEED</span>
+      <input type="range" id="speedSlider" min="1" max="20" value="20">
+      <span id="speedVal">20</span>
+    </div>
+  </div>
+</div>
+
+<!--@@ENDTAB@@-->
+<!--@@TAB macros@@-->
+<div class="panel" id="panel-macros" data-tabname="macros" data-tablabel="MACROS">
+  <div class="macro-grid" id="macroGrid"></div>
+</div>
+
+
+<!--@@ENDTAB@@-->
+<!--@@TAB media@@-->
+<div class="panel" id="panel-media" data-tabname="media" data-tablabel="MEDIA">
+
+  <div class="media-panel">
+
+    <div class="media-card">
+
+      <div class="media-title">SEARCH</div>
+
+      <div class="media-search">
+        <input
+          id="mediaSearch"
+          type="text"
+          placeholder="Search..."
+          autocomplete="on">
+        <button class="btn" onclick="sendMediaSearch()">GO</button>
+      </div>
+
+    </div>
+
+    <div class="media-card">
+
+      <div class="media-title">NAVIGATE RESULTS</div>
+
+      <div class="nav-skip-row">
+        <button class="btn" onclick="navSkipToContent()">SKIP TO CONTENT</button>
+        <button class="btn" onclick="navToFirstResult()">FIRST RESULT</button>
+        <input type="number" id="navFirst" value="8" min="1" max="40"
+               title="Tabs from skip-to-content to the first result">
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-header">PER-RESULT STEP
+          <input type="number" id="navStep" value="4" min="1" max="40"
+                 title="Tabs between one result and the next (usually 4)">
+          tabs
+        </div>
+        <div class="media-controls col-5 nav-nudge-row">
+          <button class="media-btn" onclick="navNudgeBack()">
+            <span class="media-icon">
+              <svg width="20" height="20"><use href="#icon-nudge-back"></use></svg>
+            </span>
+            <span class="media-label">Nudge</span>
+          </button>
+          <button class="media-btn" onclick="navPrevResult()">
+            <span class="media-icon">
+              <svg width="20" height="20"><use href="#icon-tab-prev"></use></svg>
+            </span>
+            <span class="media-label">Prev</span>
+          </button>
+          <button class="media-btn" onclick="navNextResult()">
+            <span class="media-icon">
+              <svg width="20" height="20"><use href="#icon-tab-next"></use></svg>
+            </span>
+            <span class="media-label">Next</span>
+          </button>
+          <button class="media-btn" onclick="navNudgeFwd()">
+            <span class="media-icon">
+              <svg width="20" height="20"><use href="#icon-nudge-fwd"></use></svg>
+            </span>
+            <span class="media-label">Nudge</span>
+          </button>
+          <button class="media-btn" onclick="navEnter()">
+            <span class="media-icon">
+              <svg width="20" height="20"><use href="#icon-enter"></use></svg>
+            </span>
+            <span class="media-label">Open</span>
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="media-card">
+
+      <div class="media-title">PLAYBACK</div>
+
+      <div class="media-controls col-5 playback">
+
+        
+        <button class="media-btn" onclick="mediaCombo(0x02,'p')">
+          <span class="media-icon">
+            <svg width="20" height="20"><use href="#icon-prev"></use></svg>
+          </span>
+          <span class="media-label">Prev</span>
+        </button>
+        <button class="media-btn" onclick="mediaKey('j')">
+      <span class="media-icon">
+      <svg width="20" height="20"><use href="#icon-rewind"></use></svg>
+      </span>
+      <span class="media-label">-10s</span>
+      </button>
+
+      <button class="media-btn" onclick="mediaKey('k')">
+        <span class="media-icon">
+          <svg width="20" height="20"><use href="#icon-play"></use></svg>
+        </span>
+        <span class="media-label">Play</span>
+      </button>
+      
+
+
+<button class="media-btn" onclick="mediaKey('l')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-forward"></use></svg>
+  </span>
+  <span class="media-label">+10s</span>
+</button>
+<button class="media-btn" onclick="mediaCombo(0x02,'n')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-next"></use></svg>
+  </span>
+  <span class="media-label">Next</span>
+</button>
+
+
+
+      </div>
+
+    </div>
+
+    <div class="media-card">
+
+      <div class="media-title">VOLUME</div>
+
+      <div class="media-controls col-3 volume">
+<button class="media-btn" onclick="mediaKey('↓')">
+  <span class="media-icon">
+    <svg width="20" height="20">
+      <use href="#icon-volume-down"></use>
+    </svg>
+  </span>
+  <span class="media-label">Vol-</span>
+</button>
+
+<button class="media-btn" onclick="mediaKey('m')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-mute"></use></svg>
+  </span>
+  <span class="media-label">Mute</span>
+</button>
+
+<button class="media-btn" onclick="mediaKey('↑')">
+  <span class="media-icon">
+    <svg width="20" height="20">
+      <use href="#icon-volume-up"></use>
+    </svg>
+  </span>
+  <span class="media-label">Vol+</span>
+</button>
+
+</div></div>
+<div class="media-card">
+
+      <div class="media-title">FRAME / SPEED</div>
+
+      <div class="media-controls col-4 speed">
+<button class="media-btn" onclick="mediaCombo(0x02,',')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-rate-down"></use></svg>
+  </span>
+  <span class="media-label">Rate-</span>
+</button>
+<button class="media-btn" onclick="mediaKey(',')">
+        <span class="media-icon">
+          <svg width="20" height="20"><use href="#icon-frame-back"></use></svg>
+        </span>
+        <span class="media-label">Frame</span>
+      </button>
+<button class="media-btn" onclick="mediaKey('.')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-frame-forward"></use></svg>
+  </span>
+  <span class="media-label">Frame</span>
+</button>
+<button class="media-btn" onclick="mediaCombo(0x02,'.')">
+  <span class="media-icon">
+    <svg width="20" height="20"><use href="#icon-rate-up"></use></svg>
+  </span>
+  <span class="media-label">Rate+</span>
+</button>
+
+
+
+      </div>
+
+    </div>
+
+    <div class="media-card">
+
+      <div class="media-title">SEEK POSITION</div>
+
+      <div class="seek-wrap">
+
+        <div class="seek-header">
+          <span>0%</span>
+          <span id="seekValue">50%</span>
+          <span>90%</span>
+        </div>
+
+        <input
+          type="range"
+          min="0"
+          max="90"
+          value="0"
+          id="seekSlider">
+
+      </div>
+
+    </div>
+
+    <div class="media-card">
+
+      <div class="media-title">DISPLAY</div>
+
+      <div class="media-controls col-3">
+        <button class="media-btn" onclick="mediaKey('f')">
+          <span class="media-icon">
+            <svg width="20" height="20"><use href="#icon-fullscreen"></use></svg>
+          </span>
+          <span class="media-label">Fullscreen</span>
+        </button>
+        <button class="media-btn" onclick="mediaKey('t')">
+          <span class="media-icon">
+            <svg width="20" height="20"><use href="#icon-theater"></use></svg>
+          </span>
+          <span class="media-label">Theater</span>
+        </button>
+        <button class="media-btn" onclick="mediaKey('i')">
+          <span class="media-icon">
+            <svg width="20" height="20"><use href="#icon-miniplayer"></use></svg>
+          </span>
+          <span class="media-label">Miniplayer</span>
+        </button>
+      </div>
+
+    </div>
+
+  </div>
+
+</div>
+
+
+<!-- Dynamically rendered custom tab panels are injected here -->
+<div id="customPanels"></div>
+
+<!-- The CUSTOM editor / management panel -->
+<!--@@ENDTAB@@-->
+<!--@@TAB irdb@@-->
+<div class="panel" id="panel-irdb" data-tabname="irdb" data-tablabel="IR DB">
+  <p class="small" style="color:var(--text-dim);margin:0 0 8px">
+    Find a remote and send NEC codes straight from this device.
+    <a href="/irdb" target="_blank" rel="noopener" style="color:var(--accent2)">Open full screen ↗</a>
+  </p>
+  <iframe class="irdb-frame" src="/irdb" title="IR code finder" loading="lazy"></iframe>
+</div>
+<!--@@ENDTAB@@-->
+<!--@@TAB learn@@-->
+<div class="panel" id="panel-learn" data-tabname="learn" data-tablabel="LEARN">
+  <p class="small" style="color:var(--text-dim);margin:0 0 8px">
+    Capture and replay your own IR / 433 MHz remotes.
+    <a href="/learn" target="_blank" rel="noopener" style="color:var(--accent2)">Open full screen ↗</a>
+  </p>
+  <iframe class="irdb-frame" src="/learn" title="Learn remotes" loading="lazy"></iframe>
+</div>
+<!--@@ENDTAB@@-->
+<!--@@TAB customedit@@-->
+<div class="panel" id="panel-customedit" data-tabname="customedit" data-tablabel="+ CUSTOM" data-tabkind="add">
+  <div class="ce-toolbar">
+    <button class="btn" onclick="ceAddTab()">+ Add Tab</button>
+    <button class="btn ce-secondary" onclick="ceExport()">Export All</button>
+    <button class="btn ce-secondary" onclick="document.getElementById('ceImportFile').click()">Import (replace)</button>
+    <input type="file" id="ceImportFile" accept="application/json,.json" style="display:none" onchange="ceImport(event)">
+    <input type="file" id="cePanelsFile" accept="application/json,.json" style="display:none" onchange="ceImportPanels(event)">
+  </div>
+  <div class="ce-hint" id="ceHint">No custom tabs yet. Tap “+ Add Tab” to create one. Your tabs appear in the bar above and are saved in this browser. Use Export to back them up or move them to another device. You can also import panels into a single tab to share tabs individually.</div>
+  <div id="ceEditor"></div>
+</div>
+
+<!--@@ENDTAB@@-->
+<div id="log"></div>
+
+<script>
+// Warm the TLS connection immediately on load so the first real command rides an
+// already-handshaked keep-alive connection instead of paying for a fresh ECDHE
+// handshake (~1-2 s on the device). Fire-and-forget; ping() below re-checks status.
+try { fetch('/api/ping', { credentials: 'same-origin', cache: 'no-store' }); } catch (e) {}
+// ── State ──────────────────────────────────────────────────────────────────
+// Each modifier (except CAPS) has two modes:
+//   one-shot  — single tap: fires once with the next keypress then releases.
+//               Key is highlighted with .mod-active (pink).
+//   sticky    — double tap within DOUBLE_TAP_MS: stays on until tapped again.
+//               Key is highlighted with .mod-sticky (purple).
+//
+// CAPS is always a simple toggle (no one-shot mode) — it has separate state.
+//
+// Double-tap detection: we record the last tap time and key name.
+// If the same modifier is tapped again within DOUBLE_TAP_MS it goes sticky.
+const mods = { LSHIFT:false, LCTRL:false, LALT:false, LGUI:false };
+const MOD_BITS = { LSHIFT:0x02, LCTRL:0x01, LALT:0x04, LGUI:0x08 };
+let currentMod = 0;
+let capsActive = false;   // tracks Caps Lock LED state (separate from mod bits)
+let sessionActive = true;
+
+const DOUBLE_TAP_MS = 300;   // max gap between two taps to count as double-tap
+
+// Per-modifier state: 'off' | 'oneshot' | 'sticky'
+const modState = { LSHIFT:'off', LCTRL:'off', LALT:'off', LGUI:'off' };
+
+// Last tap timestamp and key for double-tap detection
+let _lastTapKey  = '';
+let _lastTapTime = 0;
+
+const KEY_CODES = {
+  'a':0x04,'b':0x05,'c':0x06,'d':0x07,'e':0x08,'f':0x09,'g':0x0A,'h':0x0B,
+  'i':0x0C,'j':0x0D,'k':0x0E,'l':0x0F,'m':0x10,'n':0x11,'o':0x12,'p':0x13,
+  'q':0x14,'r':0x15,'s':0x16,'t':0x17,'u':0x18,'v':0x19,'w':0x1A,'x':0x1B,
+  'y':0x1C,'z':0x1D,'1':0x1E,'2':0x1F,'3':0x20,'4':0x21,'5':0x22,'6':0x23,
+  '7':0x24,'8':0x25,'9':0x26,'0':0x27,
+  'ENTER':0x28,'ESC':0x29,'BKSP':0x2A,'TAB':0x2B,'SPACE':0x2C,
+  '-':0x2D,'=':0x2E,'[':0x2F,']':0x30,'#':0x31,';':0x33,"'":0x34,
+  '`':0x35,',':0x36,'.':0x37,'/':0x38,'CAPS':0x39,
+  'F1':0x3A,'F2':0x3B,'F3':0x3C,'F4':0x3D,'F5':0x3E,'F6':0x3F,
+  'F7':0x40,'F8':0x41,'F9':0x42,'F10':0x43,'F11':0x44,'F12':0x45,
+  'PRTSC':0x46,'SCRLK':0x47,'PAUSE':0x48,
+  'INS':0x49,'HOME':0x4A,'PGUP':0x4B,'DEL':0x4C,'END':0x4D,'PGDN':0x4E,
+  '→':0x4F,'←':0x50,'↓':0x51,'↑':0x52,
+  'NUMLK':0x53,'\\':0x64,
+  'F13':0x68,'F14':0x69,'F15':0x6A,'F16':0x6B,
+  'F17':0x6C,'F18':0x6D,'F19':0x6E,'F20':0x6F,
+  'F21':0x70,'F22':0x71,'F23':0x72,'F24':0x73,
+  'APP':0x65,'-':0x2D,
+  'POWER':0x66,'EXECUTE':0x74,'HELP':0x75,'MENU':0x76,
+};
+
+// Two-layer legend map: [normal, shifted/caps]
+// Keys not listed here keep their label unchanged in both states.
+const LEGENDS = new Map([
+ ['1','!'],
+ ['2','"'],
+ ['3','£'],
+ ['4','$'],
+ ['5','%'],
+ ['6','^'],
+ ['7','&'],
+ ['8','*'],
+ ['9','('],
+ ['0',')'],
+
+ ['-','_'],
+ ['=','+'],
+
+ ['[','{'],
+ [']','}'],
+
+ [';',':'],
+
+ // UK
+ ["'","@"],
+ ['#','~'],
+
+ [',','<'],
+ ['.','>'],
+ ['/','?'],
+ ['\\','|'],
+]);
+
+const LAYOUT = [
+  ['ESC','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12'],
+  ['F13','F14','F15','F16','F17','F18','F19','F20','F21','F22','F23','F24'],
+  ['PRTSC','SCRLK','PAUSE','NUMLK','APP'],
+  ['`','1','2','3','4','5','6','7','8','9','0','-','=','BKSP'],
+  ['TAB','q','w','e','r','t','y','u','i','o','p','[',']','#'],
+  ['CAPS','a','s','d','f','g','h','j','k','l',';',"'",'ENTER'],
+  ['LSHIFT','\\','z','x','c','v','b','n','m',',','.','/',  'RSHIFT'],
+  ['PGUP','↑','PGDN'],
+  ['LCTRL','LGUI','LALT','SPACE','RALT','←','↓','→'],
+];
+const WIDE = {
+  'BKSP':'wide-2','TAB':'wide-1-5','CAPS':'wide-2','ENTER':'wide-2',
+  'LSHIFT':'wide-1-5','ISO':'wide-1-5','RSHIFT':'wide-1-5','SPACE':'wide-6',
+  'LCTRL':'wide-1-5','LGUI':'wide-1-5','LALT':'wide-1-5','RALT':'wide-1-5','ESC':'wide-1-5',
+  'PGUP':'wide-2','PGDN':'wide-2',
+  'PRTSC':'wide-2','SCRLK':'wide-2','PAUSE':'wide-2','NUMLK':'wide-2','APP':'wide-2',
+};
+const MODKEYS = new Set(['LSHIFT','RSHIFT','LCTRL','RCTRL','LALT','RALT','LGUI','CAPS']);
+
+// Store a reference to each key element so updateLegends() can reach them
+const keyElements = {};
+
+function buildKeyboard() {
+  const kb = document.getElementById('keyboard');
+  if (!kb) return;   // keyboard tab not served
+  LAYOUT.forEach((row, ri) => {
+    const rowEl = document.createElement('div');
+    const rowClass = ri === 0 ? ' fn-row' : ri === 1 ? ' fn2-row' : ri === 2 ? ' sys-row' : '';
+    rowEl.className = 'kb-row' + rowClass;
+    row.forEach(k => {
+      const el = document.createElement('div');
+      el.className = 'key' + (WIDE[k] ? ' '+WIDE[k] : '');
+      el.textContent = k;
+      el.dataset.key = k;
+      keyElements[k] = el;
+      el.addEventListener('pointerdown', e => { e.preventDefault(); handleKeyDown(k, el); });
+      rowEl.appendChild(el);
+    });
+    kb.appendChild(rowEl);
+  });
+}
+
+// Update every key's visible label to reflect current shift/caps state.
+// Caps affects letters only; Shift affects everything; Shift+Caps = lowercase.
+function updateLegends() {
+  const shiftOn = mods.LSHIFT;
+  for (const [k, el] of Object.entries(keyElements)) {
+    const lc = k.toLowerCase();
+    const isLetter = lc.length === 1 && lc >= 'a' && lc <= 'z';
+    if (isLetter) {
+      // Letters: caps XOR shift decides case
+      el.textContent = (capsActive !== shiftOn) ? k.toUpperCase() : k.toLowerCase();
+    } else if (k === 'ISO') {
+      el.textContent = shiftOn ? '|' : '\\';
+    } else if (LEGENDS.has(k)) {
+      // Punctuation/digits: shift only (caps does not affect these)
+      el.textContent = shiftOn ? LEGENDS.get(k) : k;
+    }
+  }
+}
+
+// Recompute currentMod from the mods object.
+function syncMods() {
+  currentMod = Object.entries(mods).reduce((acc,[m,v]) => acc|(v?MOD_BITS[m]:0), 0);
+}
+
+// Apply the correct visual class to a modifier key element based on its state.
+function _applyModClass(el, state) {
+  el.classList.toggle('mod-active', state === 'oneshot');
+  el.classList.toggle('mod-sticky', state === 'sticky');
+}
+
+// Turn a modifier fully off, clearing both visual classes.
+function _clearMod(normMod) {
+  modState[normMod] = 'off';
+  mods[normMod] = false;
+  // Clear both left and right key elements
+  for (const mk of [normMod, normMod.replace(/^L/, 'R')]) {
+    if (keyElements[mk]) {
+      keyElements[mk].classList.remove('mod-active', 'mod-sticky');
+    }
+  }
+}
+
+function handleKeyDown(k, el) {
+  el.classList.add('pressed');
+  setTimeout(() => el.classList.remove('pressed'), 150);
+
+  // Normalise R-variants to their L equivalent for state tracking
+  const normMod = k.replace(/^R/, 'L');
+
+  // ── CAPS: simple toggle, no one-shot mode ────────────────────────────────
+  if (k === 'CAPS') {
+    capsActive = !capsActive;
+    el.classList.toggle('mod-active', capsActive);
+    sendKey(0, KEY_CODES['CAPS']);
+    updateLegends();
+    return;
+  }
+
+  // ── Other modifier keys ──────────────────────────────────────────────────
+  if (MODKEYS.has(k)) {
+    const now = Date.now();
+    const isDoubleTap = (k === _lastTapKey) &&
+                        (now - _lastTapTime < DOUBLE_TAP_MS) &&
+                        (modState[normMod] === 'oneshot');
+
+    if (isDoubleTap) {
+      // Double-tap: promote to sticky
+      modState[normMod] = 'sticky';
+      mods[normMod] = true;
+      _applyModClass(el, 'sticky');
+      // Also style the opposite-hand key if it exists (e.g. RSHIFT)
+      const rKey = normMod.replace(/^L/, 'R');
+      if (keyElements[rKey]) _applyModClass(keyElements[rKey], 'sticky');
+      _lastTapKey = '';  // consume the double-tap so a third tap starts fresh
+    } else if (modState[normMod] === 'off') {
+      // First tap: go one-shot
+      modState[normMod] = 'oneshot';
+      mods[normMod] = true;
+      _applyModClass(el, 'oneshot');
+      _lastTapKey  = k;
+      _lastTapTime = now;
+    } else {
+      // Already one-shot or sticky: tap again to turn off
+      _clearMod(normMod);
+      _lastTapKey = '';
+    }
+
+    syncMods();
+    updateLegends();
+    return;
+  }
+
+  // ── Regular key ──────────────────────────────────────────────────────────
+  const kc = KEY_CODES[k] ?? KEY_CODES[k.toLowerCase()] ?? 0;
+  let effectiveMod = currentMod;
+  // Caps only affects letters — XOR the shift bit for letter keys
+  const isLetter = k.length === 1 && k >= 'a' && k <= 'z';
+  if (capsActive && isLetter) effectiveMod ^= 0x02;
+  sendKey(effectiveMod, kc);
+
+  // Release all one-shot mods; leave sticky mods in place
+  let releasedAny = false;
+  for (const m of ['LSHIFT', 'LCTRL', 'LALT', 'LGUI']) {
+    if (modState[m] === 'oneshot') {
+      _clearMod(m);
+      releasedAny = true;
+    }
+  }
+  if (releasedAny) {
+    syncMods();
+    updateLegends();
+  }
+}
+
+// ── Session handling ───────────────────────────────────────────────────────
+function showLockOverlay() {
+  sessionActive = false;
+  document.getElementById('lock-overlay').classList.add('visible');
+  document.getElementById('lock-pw').value = '';
+  setTimeout(() => document.getElementById('lock-pw').focus(), 50);
+}
+
+function hideLockOverlay() {
+  sessionActive = true;
+  document.getElementById('lock-overlay').classList.remove('visible');
+  document.getElementById('lock-err').style.display = 'none';
+}
+
+function openSettings() {
+  syncOsSelector();
+  const vt = document.getElementById('verboseToggle');
+  if (vt) vt.checked = getVerbose();
+  document.getElementById('settings-overlay').classList.add('visible');
+}
+function closeSettings() {
+  document.getElementById('settings-overlay').classList.remove('visible');
+}
+
+async function reauth() {
+  const pw = document.getElementById('lock-pw').value;
+  const errEl = document.getElementById('lock-err');
+  try {
+    const r = await fetch('/api/auth', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({password: pw})
+    });
+    const j = await r.json();
+    if (j.ok) {
+      hideLockOverlay();
+      logMsg('Session renewed', 'ok');
+    } else if (j.error === 'locked') {
+      errEl.textContent = 'Locked for ' + j.retry_after + 's.';
+      errEl.style.display = 'block';
+    } else {
+      errEl.textContent = 'Incorrect password.';
+      errEl.style.display = 'block';
+      document.getElementById('lock-pw').value = '';
+    }
+  } catch(e) {
+    errEl.textContent = 'Connection error.';
+    errEl.style.display = 'block';
+  }
+}
+
+async function logout() {
+  try {
+    await fetch('/api/logout', {method:'POST'});
+  } catch(e) {}
+  window.location.replace('/');
+}
+
+// ── API ────────────────────────────────────────────────────────────────────
+async function api(path, body, opts) {
+  const quiet = opts && opts.quiet;
+  try {
+    const r = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body)
+    });
+    if (r.status === 401) {
+      showLockOverlay();
+      return null;
+    }
+    const j = await r.json();
+    if (j.ok) { if (!quiet) logMsg('ok: ' + path, 'ok'); }
+    else      logMsg('err: ' + JSON.stringify(j), 'err');   // errors always log
+    return j;
+  } catch(e) {
+    logMsg('fetch error: ' + e, 'err');
+    setStatus(false);
+    return null;
+  }
+}
+
+// ── Coalescing mouse sender ───────────────────────────────────────────────────
+// pointermove can fire 100+ times/second. Firing a fetch per event opens several
+// parallel TLS connections (each a fresh handshake) and floods the device. Instead
+// keep at most ONE mouse request in flight and accumulate movement while it's
+// pending — so all motion rides a single warm keep-alive connection. Relative
+// deltas are summed (with the unsent remainder preserved, so fast swipes aren't
+// truncated); absolute positions collapse to the latest.
+let hidBusy = false;
+let pendRel = null;   // {buttons, dx, dy, wheel}
+let pendAbs = null;   // {buttons, x, y, wheel}
+let pendClicks = [];  // discrete click events — never coalesced (double-click!)
+function clamp127(v){ return v < -127 ? -127 : (v > 127 ? 127 : v); }
+
+// Clicks must NOT be merged the way movement is: OR-ing two left-clicks into one
+// button bit would turn a double-click into a single click. So they queue as
+// discrete events and flush one per request, ahead of movement.
+function queueClick(buttons, abs, x, y){
+  pendClicks.push({buttons, abs, x, y});
+  flushHid();
+}
+
+function queueRel(buttons, dx, dy, wheel){
+  if (!pendRel) pendRel = {buttons:0, dx:0, dy:0, wheel:0};
+  pendRel.buttons |= buttons;
+  pendRel.dx += dx; pendRel.dy += dy; pendRel.wheel += wheel;
+  flushHid();
+}
+function queueAbs(buttons, x, y, wheel){
+  pendAbs = { buttons: (pendAbs ? pendAbs.buttons : 0) | buttons, x, y,
+              wheel: (pendAbs ? pendAbs.wheel : 0) + wheel };
+  flushHid();
+}
+async function flushHid(){
+  if (hidBusy) return;
+  let path, body;
+  if (pendClicks.length){                                  // clicks take priority
+    const c = pendClicks.shift();
+    if (c.abs){ body = {buttons:c.buttons, x:c.x, y:c.y, wheel:0}; path = '/api/mouse_abs'; }
+    else      { body = {buttons:c.buttons, x:0, y:0, wheel:0};     path = '/api/mouse'; }
+  } else if (pendRel){
+    const dx = clamp127(pendRel.dx), dy = clamp127(pendRel.dy), w = clamp127(pendRel.wheel);
+    body = { buttons: pendRel.buttons, x: dx, y: dy, wheel: w };
+    path = '/api/mouse';
+    pendRel.dx -= dx; pendRel.dy -= dy; pendRel.wheel -= w;
+    pendRel.buttons = 0;                                   // buttons sent once
+    if (!pendRel.dx && !pendRel.dy && !pendRel.wheel) pendRel = null;
+  } else if (pendAbs){
+    body = pendAbs; path = '/api/mouse_abs'; pendAbs = null;
+  } else {
+    return;
+  }
+  hidBusy = true;
+  try { await api(path, body, {quiet:true}); }
+  finally {
+    hidBusy = false;
+    if (pendClicks.length || pendRel || pendAbs) flushHid();  // drain what queued meanwhile
+  }
+}
+
+function sendKey(modifier, keycode) {
+  if (!keycode) return;
+  api('/api/key', {modifier, keys:[keycode,0,0,0,0,0]});
+}
+
+function sendText() {
+  const t = document.getElementById('textInput').value;
+  if (!t) return;
+  api('/api/text', {text: t});
+  document.getElementById('textInput').value = '';
+}
+
+function wakeHost() {
+  api('/api/wake', {});
+  logMsg('wake signal sent (host must allow USB wake)', 'ok');
+}
+
+document.getElementById('textInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); sendText(); }
+});
+
+// ── Mouse ──────────────────────────────────────────────────────────────────
+let tp = document.getElementById('trackpad');
+let tpActive = false, lastX = 0, lastY = 0;
+let speedSlider = document.getElementById('speedSlider');
+if (speedSlider) speedSlider.addEventListener('input', () => {
+  document.getElementById('speedVal').textContent = speedSlider.value;
+});
+
+// Mouse mode: 'rel' (deltas via /api/mouse) or 'abs' (screen-mapped via
+// /api/mouse_abs). In absolute mode the trackpad maps 1:1 to the screen, so
+// touching the pad's top-left moves the cursor to the screen's top-left.
+const ABS_MAX = 32767;
+let mouseMode = 'rel';
+let lastAbsX = ABS_MAX >> 1, lastAbsY = ABS_MAX >> 1;  // last abs position (for clicks)
+
+function setMouseMode(mode) {
+  mouseMode = mode;
+  document.getElementById('modeRel').classList.toggle('active', mode === 'rel');
+  document.getElementById('modeAbs').classList.toggle('active', mode === 'abs');
+  // Speed only affects relative mode; hint explains the active mode.
+  document.getElementById('speedRow').style.display = (mode === 'rel') ? '' : 'none';
+  document.getElementById('mouseHint').textContent = (mode === 'rel')
+    ? 'Drag to move the cursor. Speed adjusts sensitivity.'
+    : 'The pad maps to the whole screen — touch where you want the cursor.';
+  try { localStorage.setItem('nethid.mousemode', mode); } catch (e) {}
+}
+
+// Convert a pointer event to absolute screen coords (0..ABS_MAX) based on
+// where it lands inside the trackpad rectangle.
+function absFromEvent(e) {
+  const r = tp.getBoundingClientRect();
+  let fx = (e.clientX - r.left) / r.width;
+  let fy = (e.clientY - r.top) / r.height;
+  fx = Math.max(0, Math.min(1, fx));
+  fy = Math.max(0, Math.min(1, fy));
+  return { x: Math.round(fx * ABS_MAX), y: Math.round(fy * ABS_MAX) };
+}
+
+if (tp) {
+tp.addEventListener('pointerdown', e => {
+  tpActive = true; lastX = e.clientX; lastY = e.clientY;
+  tp.classList.add('active'); tp.setPointerCapture(e.pointerId);
+  if (mouseMode === 'abs') {
+    const a = absFromEvent(e);
+    lastAbsX = a.x; lastAbsY = a.y;
+    queueAbs(0, a.x, a.y, 0);
+  }
+});
+tp.addEventListener('pointermove', e => {
+  if (!tpActive) return;
+  if (mouseMode === 'abs') {
+    const a = absFromEvent(e);
+    if (a.x !== lastAbsX || a.y !== lastAbsY) {
+      lastAbsX = a.x; lastAbsY = a.y;
+      queueAbs(0, a.x, a.y, 0);
+    }
+    return;
+  }
+  const spd = parseInt(speedSlider.value);
+  const dx = Math.round((e.clientX - lastX) * spd / 8);
+  const dy = Math.round((e.clientY - lastY) * spd / 8);
+  if (dx !== 0 || dy !== 0) {
+    queueRel(0, Math.max(-127,Math.min(127,dx)), Math.max(-127,Math.min(127,dy)), 0);
+    lastX = e.clientX; lastY = e.clientY;
+  }
+});
+tp.addEventListener('pointerup',     () => { tpActive = false; tp.classList.remove('active'); });
+tp.addEventListener('pointercancel', () => { tpActive = false; tp.classList.remove('active'); });
+}
+
+function mouseClick(btn) {
+  // Route through the same single-in-flight queue as movement. Calling api()
+  // directly here raced with an in-flight move (hidBusy), opening a parallel
+  // connection and dropping clicks mid-drag. The queue ORs the button bits in,
+  // so a click always rides the next report; the endpoint auto-releases.
+  if (mouseMode === 'abs') queueClick(btn, true, lastAbsX, lastAbsY);
+  else                     queueClick(btn, false, 0, 0);
+}
+let scrollTimer = null;
+function startScroll(dir) {
+  stopScroll();
+  function doScroll() {
+    if (mouseMode === 'abs') queueAbs(0, lastAbsX, lastAbsY, dir);
+    else queueRel(0, 0, 0, dir);
+  }
+  doScroll(); scrollTimer = setInterval(doScroll, 120);
+}
+function stopScroll() { if (scrollTimer) { clearInterval(scrollTimer); scrollTimer = null; } }
+
+// Restore saved mouse mode (default relative)
+(function(){
+  if (!tp) return;   // mouse tab not served for this user
+  let m = 'rel';
+  try { const v = localStorage.getItem('nethid.mousemode'); if (v==='abs'||v==='rel') m=v; } catch(e){}
+  setMouseMode(m);
+})();
+
+// ── Macros ─────────────────────────────────────────────────────────────────
+const MACROS = [
+  {label:'Ctrl+C',mod:0x01,key:0x06},{label:'Ctrl+V',mod:0x01,key:0x19},
+  {label:'Ctrl+X',mod:0x01,key:0x1B},{label:'Ctrl+Z',mod:0x01,key:0x1C},
+  {label:'Ctrl+A',mod:0x01,key:0x04},{label:'Ctrl+S',mod:0x01,key:0x16},
+  {label:'Ctrl+F',mod:0x01,key:0x09},{label:'Alt+F4',mod:0x04,key:0x3D},
+  {label:'Win+D', mod:0x08,key:0x07},{label:'Win+L', mod:0x08,key:0x0F},
+  {label:'PrtScn',mod:0x00,key:0x46},{label:'SLEEP', mod:0x00,key:0x48},
+];
+function buildMacros() {
+  const grid = document.getElementById('macroGrid');
+  if (!grid) return;   // macros tab not served
+  MACROS.forEach(m => {
+    const el = document.createElement('div');
+    el.className = 'macro-btn'; el.textContent = m.label;
+    el.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      api('/api/key', {modifier:m.mod, keys:[m.key,0,0,0,0,0]});
+    });
+    grid.appendChild(el);
+  });
+}
+
+
+function mediaKey(key) {
+  const kc = KEY_CODES[key];
+  if (!kc) return;
+
+  api('/api/key', {
+    modifier:0,
+    keys:[kc,0,0,0,0,0]
+  });
+}
+
+function mediaCombo(mod,key) {
+  const kc = KEY_CODES[key];
+  if (!kc) return;
+
+  api('/api/key', {
+    modifier:mod,
+    keys:[kc,0,0,0,0,0]
+  });
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendKeyPress(mod,key) {
+
+  await api('/api/key', {
+    modifier:mod,
+    keys:[key,0,0,0,0,0]
+  });
+
+  await delay(100);
+}
+
+async function sendMediaSearch() {
+
+  const input = document.getElementById('mediaSearch');
+
+  const text = input.value.trim();
+
+  if (!text) return;
+
+  // Focus the search box. YouTube's shortcut is '/' (forward slash).
+  await sendKeyPress(0, KEY_CODES['/']);
+
+  // Give UI time to appear
+  await delay(750);
+
+  // Select existing search text
+  await sendKeyPress(0x01, KEY_CODES['a']);
+
+  await delay(500);
+
+  // Type search text
+  await api('/api/text', { text });
+
+  await delay(500);
+
+  // Execute search
+  await sendKeyPress(0, KEY_CODES['ENTER']);
+
+  input.value = '';
+}
+
+// ── Results navigation ──────────────────────────────────────────────────────
+// YouTube's focus order after a search:
+//   1. Tab, Tab, Enter      activates the 'skip to content' link
+//   2. + N Tabs (default 8) lands on the first search result
+//   3. each result is ~M tabs apart (default 4, but varies)
+// So we expose: skip-to-content, skip-to-first-result (count N, editable),
+// and next/prev result that step M tabs (count M, editable).
+function _navCount(id, fallback) {
+  const el = document.getElementById(id);
+  let n = parseInt(el && el.value, 10);
+  if (!Number.isFinite(n) || n < 1) n = fallback;
+  if (n > 40) n = 40;   // safety cap
+  return n;
+}
+
+async function navSkipToContent() {
+  // The 'skip to content' link is reached with Tab, Tab, then Enter.
+  //await sendKeyPress(0, KEY_CODES['HOME']);
+  await sendKeyPress(0, KEY_CODES['TAB']);
+  await sendKeyPress(0, KEY_CODES['TAB']);
+  await sendKeyPress(0, KEY_CODES['ENTER']);
+  logMsg('skip-to-content (tab tab enter)', 'ok');
+}
+
+async function navToFirstResult() {
+  const n = _navCount('navFirst', 8);
+  for (let i = 0; i < n; i++) await sendKeyPress(0, KEY_CODES['TAB']);
+  logMsg('advanced ' + n + ' tabs to first result', 'ok');
+}
+
+async function navNextResult() {
+  const n = _navCount('navStep', 4);
+  for (let i = 0; i < n; i++) await sendKeyPress(0, KEY_CODES['TAB']);
+  logMsg('next result (+' + n + ' tabs)', 'ok');
+}
+
+async function navPrevResult() {
+  const n = _navCount('navStep', 4);
+  for (let i = 0; i < n; i++) await sendKeyPress(0x02, KEY_CODES['TAB']);
+  logMsg('prev result (-' + n + ' tabs)', 'ok');
+}
+
+function navEnter() { mediaKey('ENTER'); }
+
+// Single-step nudges (one Tab / one Shift+Tab) for fine focus adjustment.
+function navNudgeFwd()  { mediaKey('TAB'); }
+function navNudgeBack() { mediaCombo(0x02, 'TAB'); }
+// ── Tabs ───────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.getAttribute('data-tab') === name);
+  });
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('panel-'+name);
+  if (panel) panel.classList.add('active');
+  // Entering the editor re-renders it so it reflects current state.
+  if (name === 'customedit') renderEditor();
+}
+
+// Build the tab bar from the panels actually present in the DOM. The firmware
+// serves only the panels this user is granted, so the bar reflects exactly
+// those. Custom user tabs are inserted (before the "+ CUSTOM" chip) afterwards
+// by renderCustomTabs().
+function buildTabBar() {
+  const bar = document.getElementById('tabBar');
+  if (!bar) return;
+  document.querySelectorAll('.panel[data-tabname]').forEach(p => {
+    const name  = p.getAttribute('data-tabname');
+    const label = p.getAttribute('data-tablabel') || name;
+    const isAdd = p.getAttribute('data-tabkind') === 'add';
+    const el = document.createElement('div');
+    el.className = 'tab' + (isAdd ? ' tab-custom-add' : '');
+    el.setAttribute('data-tab', name);
+    el.textContent = label;
+    el.onclick = () => switchTab(name);
+    if (isAdd) el.title = 'Create and edit your own tabs';
+    bar.appendChild(el);
+  });
+}
+
+// ── Status / ping ──────────────────────────────────────────────────────────
+function setStatus(ok) {
+  document.getElementById('statusDot').className = 'dot ' + (ok ? 'ok' : 'err');
+  document.getElementById('statusText').textContent = ok ? 'connected' : 'offline';
+}
+async function ping() {
+  try {
+    // credentials:'same-origin' guarantees the session cookie is sent, and
+    // cache:'no-store' prevents the browser serving a cached 200 without ever
+    // hitting the device — either of which would stop the ping from counting
+    // as activity and let the session idle out. This keep-alive is what makes
+    // the 5-minute timeout an INACTIVITY timeout rather than a fixed lifetime.
+    const r = await fetch('/api/ping', { credentials: 'same-origin', cache: 'no-store' });
+    if (r.status === 401) { showLockOverlay(); return; }
+    const j = await r.json();
+    setStatus(j.ok === true);
+  } catch { setStatus(false); }
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────
+function logMsg(msg, cls='info') {
+  const log = document.getElementById('log');
+  const d = document.createElement('div');
+  d.className = 'log-'+cls;
+  d.textContent = new Date().toLocaleTimeString() + '  ' + msg;
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  while (log.children.length > 40) log.removeChild(log.firstChild);
+}
+
+// ── Custom tabs / panels / macros ───────────────────────────────────────────
+// Data model (persisted in this browser's localStorage):
+//   { version:1, tabs:[ { id, name, panels:[ { title, buttons:[
+//       { label, steps:[ {t:'combo',mod,key}   (legacy 'key' is migrated to 'combo')
+//                       | {t:'text',value} | {t:'delay',ms} ] } ] } ] } ] }
+// Every action is a sequence of steps, so a single shortcut and a multi-step
+// macro are the same shape. 'combo' is a press+release tap (matching the socket,
+// where combo=tap, key=hold). Steps map onto endpoints:
+//   combo (legacy key) -> /api/combo,  text -> /api/text,  delay -> client wait.
+
+const CUSTOM_STORE_KEY = 'nethid.custom.v1';
+let customCfg = { version: 1, tabs: [] };
+
+// ── Host OS selection ───────────────────────────────────────────────────────
+// The keystrokes go to the HOST the Pico is plugged into, which is a DIFFERENT
+// device from the browser. So the OS can't be detected from the user-agent —
+// it's chosen manually to match the host, and stored. The only thing it changes
+// is which modifier set each key/combo step uses (Ctrl vs Cmd, etc.).
+const OS_STORE_KEY = 'nethid.os';
+const OS_LIST = ['windows','mac','linux'];
+
+// The user's PREFERRED OS (what they picked, persisted). Used as the effective
+// OS unless USB detection says the host is Windows, in which case Windows wins.
+// Keeping preference separate from effective means a mac/Linux choice survives a
+// detour through a Windows host (Windows is never written into the preference).
+function getOsPref() {
+  try {
+    const v = localStorage.getItem(OS_STORE_KEY);
+    if (v && OS_LIST.includes(v)) return v;
+  } catch (e) {}
+  return 'mac';   // Windows hosts are detected via USB (0xEE MS OS descriptor),
+                  // so this preference is only ever consulted when the host is
+                  // known NOT to be Windows — i.e. macOS or Linux. Defaulting to
+                  // 'windows' here contradicted that. Linux users pick Linux once
+                  // and it persists.
+}
+
+// Runtime flag: did USB enumeration detect the host as Windows? Set on load by
+// detectHostOs(). Not persisted — re-fetched each load, and the device resets it
+// when re-enumerated on a different host.
+let g_detectedWindows = false;
+
+// Per-session manual override. Null until the user changes the selector this
+// session; once set it takes precedence over detection for the rest of the
+// session, but is forgotten on reload (so the next boot autodetects again).
+let g_sessionOsOverride = null;
+
+// EFFECTIVE OS used for sending macros. Precedence:
+//   1. a manual change made THIS session (g_sessionOsOverride),
+//   2. else Windows if USB detection saw it this boot,
+//   3. else the user's stored preference (their mac/Linux choice).
+function getOs() {
+  if (g_sessionOsOverride) return g_sessionOsOverride;
+  return g_detectedWindows ? 'windows' : getOsPref();
+}
+
+// Reflect the effective OS in the settings selector. The picker is never locked
+// — the user may change it for the session. The note appears while Windows
+// detection is the thing currently in effect (detected and not yet overridden).
+function syncOsSelector() {
+  const sel  = document.getElementById('osSelect');
+  const note = document.getElementById('osDetectNote');
+  if (sel) { sel.value = getOs(); sel.disabled = false; }
+  if (note) note.style.display = (g_detectedWindows && !g_sessionOsOverride) ? '' : 'none';
+}
+
+// Change the OS from the dropdown: applies immediately for this session (over
+// detection) and is also remembered as the stored preference, so on a
+// non-Windows host the choice persists across reloads. On a Windows host the
+// next boot will re-detect and revert to Windows (the override is per-session).
+function setOs(os) {
+  if (!OS_LIST.includes(os)) return;
+  g_sessionOsOverride = os;
+  try { localStorage.setItem(OS_STORE_KEY, os); } catch (e) {}
+  logMsg('OS set to ' + os + ' for this session', 'ok');
+  syncOsSelector();
+  if (typeof renderEditor === 'function') renderEditor();
+}
+
+// ── Verbose logging ──────────────────────────────────────────────────────────
+// When on, running a macro logs one line PER STEP (with the resolved key/combo
+// for the current host OS) instead of just a "ran macro (N steps)" summary.
+const VERBOSE_STORE_KEY = 'nethid.verbose';
+function getVerbose() {
+  try { return localStorage.getItem(VERBOSE_STORE_KEY) === '1'; } catch (e) { return false; }
+}
+function setVerbose(on) {
+  try { localStorage.setItem(VERBOSE_STORE_KEY, on ? '1' : '0'); } catch (e) {}
+  const cb = document.getElementById('verboseToggle');
+  if (cb) cb.checked = on;
+  logMsg('verbose logging ' + (on ? 'on' : 'off'), 'info');
+}
+
+// Ask the device what host OS it detected from USB enumeration. Only Windows is
+// reliably detectable. If Windows is detected AND the user hasn't manually
+// chosen an OS, set the selector to Windows; a manual choice is never
+// overridden.
+async function detectHostOs() {
+  try {
+    const r = await fetch('/api/hostinfo', { credentials: 'same-origin', cache: 'no-store' });
+    if (!r.ok) return;
+    const j = await r.json();
+    // Windows is the only reliably-detectable host. If detected it OVERRIDES
+    // the selector. If NOT detected, the host is (almost certainly) mac or
+    // Linux, and the user's preferred choice between those two is used — we
+    // simply leave the stored preference in effect and never touch it here.
+    const win = !!(j && j.os === 'windows');
+    if (win !== g_detectedWindows) {
+      g_detectedWindows = win;
+      if (win) logMsg('host detected as Windows via USB — overriding OS selection', 'ok');
+      syncOsSelector();
+      if (typeof renderEditor === 'function') renderEditor();
+    }
+  } catch (e) { /* offline or no detection — leave the preference in effect */ }
+}
+
+// Reverse lookup: HID keycode -> readable name (first match in KEY_CODES).
+function keyName(code) {
+  for (const n in KEY_CODES) if (KEY_CODES[n] === code) return (n === ' ') ? 'SPACE' : n;
+  return '0x' + (code|0).toString(16);
+}
+// Modifier bitmask -> "Ctrl+Shift" style string.
+function modName(mod) {
+  const parts = [];
+  if (mod & 0x01) parts.push('Ctrl');
+  if (mod & 0x02) parts.push('Shift');
+  if (mod & 0x04) parts.push('Alt');
+  if (mod & 0x08) parts.push('Gui');
+  return parts.join('+');
+}
+// Human description of one step, resolved for the current host OS.
+function describeStep(s, searchEl) {
+  if (s.t === 'combo' || s.t === 'key') {   // 'key' tolerated for old configs
+    const m = modName(stepMod(s));
+    const k = keyName(stepKey(s));
+    return 'combo ' + (m ? m + '+' : '') + k;
+  }
+  if (s.t === 'text')  {
+    const v = String(s.value || '').replace(/\n/g,'\\n').replace(/\t/g,'\\t');
+    return 'text "' + (v.length > 40 ? v.slice(0,40) + '…' : v) + '"';
+  }
+  if (s.t === 'search') {
+    const term = searchEl ? (searchEl.value || '') : '';
+    return 'search "' + term + '"';
+  }
+  if (s.t === 'delay')  return 'delay ' + (s.ms|0) + ' ms';
+  if (s.t === 'ir')     return (s.proto === 'nec')
+                          ? 'IR NEC 0x' + ((s.code>>>0).toString(16))
+                          : 'IR raw ' + parseTimings(s.timings).length + ' timings @ ' + ((s.carrier|0)||38000) + 'Hz';
+  if (s.t === 'rf')     return 'RF ' + parseTimings(s.timings).length + ' timings ×' + ((s.repeat|0)||6);
+  return s.t;
+}
+
+// Resolve the modifier byte for a key/combo step under the active OS.
+// A step may carry modByOs:{windows,mac,linux}; if the active OS has an entry
+// there, it overrides the step's default mod. Otherwise the default mod is used.
+function stepMod(s) {
+  const os = getOs();
+  if (s.modByOs && typeof s.modByOs[os] === 'number') return s.modByOs[os] | 0;
+  return s.mod | 0;
+}
+
+// Resolve the keycode for a key/combo step under the active OS. A step may
+// carry keyByOs:{windows,mac,linux} for shortcuts where the KEY differs per OS
+// (not just the modifier). Falls back to the step's default key.
+function stepKey(s) {
+  const os = getOs();
+  if (s.keyByOs && typeof s.keyByOs[os] === 'number') return s.keyByOs[os] | 0;
+  return s.key | 0;
+}
+
+// Resolve which steps to run for a button under the active OS.
+//   New model: btn.chains = [ {os:'all'|'windows'|'mac'|'linux', steps:[...]}, ... ]
+//   Firing runs every chain whose os is 'all' or matches the host OS, in order,
+//   concatenated. So one button can hold a Windows chain, a macOS chain, etc.,
+//   and only the matching one(s) fire.
+//   Legacy fallbacks: btn.stepsByOs (whole-chain override) and btn.steps (single
+//   shared chain) are still honoured so older configs keep working.
+function resolveSteps(btn) {
+  if (Array.isArray(btn.chains)) {
+    const os = getOs();
+    let out = [];
+    for (const ch of btn.chains) {
+      if (ch && (ch.os === 'all' || ch.os === os) && Array.isArray(ch.steps)) {
+        out = out.concat(ch.steps);
+      }
+    }
+    return out;
+  }
+  if (btn.stepsByOs) {
+    const os = getOs();
+    if (Array.isArray(btn.stepsByOs[os]) && btn.stepsByOs[os].length) return btn.stepsByOs[os];
+  }
+  return btn.steps || [];
+}
+
+// Normalize tap steps to the canonical 'combo' type. 'key' and 'combo' were
+// always functionally identical here (both carry {mod,key} and send the same
+// tap payload); 'combo' is now canonical, matching the socket where combo=tap
+// and key=hold. This rewrites key→combo wherever it appears — in chains, legacy
+// steps[], or stepsByOs — so older configs and example JSONs that used 'key'
+// load cleanly as 'combo'.
+function normalizeStepTypes(cfg) {
+  if (!cfg || !Array.isArray(cfg.tabs)) return cfg;
+  const fixSteps = (arr) => { if (Array.isArray(arr)) arr.forEach(s => { if (s && s.t === 'key') s.t = 'combo'; }); };
+  cfg.tabs.forEach(tab => (tab.panels||[]).forEach(p => (p.buttons||[]).forEach(b => {
+    if (Array.isArray(b.chains)) b.chains.forEach(ch => fixSteps(ch.steps));
+    fixSteps(b.steps);
+    if (b.stepsByOs) ['windows','mac','linux'].forEach(os => fixSteps(b.stepsByOs[os]));
+  })));
+  return cfg;
+}
+
+function customLoad() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_STORE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && Array.isArray(parsed.tabs)) customCfg = normalizeStepTypes(parsed);
+    }
+  } catch (e) { /* corrupt or unavailable: start empty */ }
+}
+
+function customSave() {
+  try {
+    localStorage.setItem(CUSTOM_STORE_KEY, JSON.stringify(customCfg));
+  } catch (e) {
+    logMsg('could not save custom config: ' + e, 'err');
+  }
+}
+
+function uid() { return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
+
+// Detect whether the Font Awesome stylesheet actually loaded. If the CDN is
+// unreachable (e.g. an offline network) or blocked, FA icons would render
+// blank, so we fall back to the SVG sprite. Cached after first check.
+let _faChecked = false, _faOk = false;
+function faAvailable() {
+  if (_faChecked) return _faOk;
+  _faChecked = true;
+  try {
+    const probe = document.createElement('i');
+    probe.className = 'fa-solid fa-star';
+    probe.style.position = 'absolute';
+    probe.style.left = '-9999px';
+    document.body.appendChild(probe);
+    const fam = (getComputedStyle(probe).fontFamily || '').toLowerCase();
+    document.body.removeChild(probe);
+    // FA sets a "Font Awesome ..." family on its icons; default is the page font.
+    _faOk = fam.includes('awesome') || fam.includes('font awesome');
+  } catch (e) { _faOk = false; }
+  return _faOk;
+}
+
+// ── Rendering the custom tabs + their panels ────────────────────────────────
+function renderCustomTabs() {
+  document.querySelectorAll('.tab[data-custom="1"]').forEach(t => t.remove());
+  const bar = document.getElementById('tabBar');
+  const addChip = document.querySelector('.tab-custom-add');
+  customCfg.tabs.forEach(tab => {
+    const el = document.createElement('div');
+    el.className = 'tab';
+    el.setAttribute('data-tab', tab.id);
+    el.setAttribute('data-custom', '1');
+    el.textContent = tab.name || 'Tab';
+    el.onclick = () => switchTab(tab.id);
+    bar.insertBefore(el, addChip);
+  });
+}
+
+// Icons available to custom buttons (must match <symbol> ids in the sprite).
+const CUSTOM_ICONS = [
+  '', 'icon-search','icon-star','icon-heart','icon-gear','icon-home','icon-bolt',
+  'icon-copy','icon-paste','icon-plus','icon-minus','icon-check','icon-x',
+  'icon-arrow-up','icon-arrow-down','icon-arrow-left','icon-arrow-right',
+  'icon-refresh','icon-power','icon-volume','icon-keyboard','icon-enter',
+  'icon-play','icon-next','icon-prev','icon-fullscreen','icon-mute'
+];
+
+function renderCustomPanels() {
+  const host = document.getElementById('customPanels');
+  host.innerHTML = '';
+  customCfg.tabs.forEach(tab => {
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    panel.id = 'panel-' + tab.id;
+    (tab.panels || []).forEach((p, pi) => {
+      const card = document.createElement('div');
+      card.className = 'media-card';
+      const title = document.createElement('div');
+      title.className = 'media-title';
+      title.textContent = p.title || '';
+      card.appendChild(title);
+
+      // Optional per-card search box. A 'search' step types its value.
+      let searchInput = null;
+      if (p.search) {
+        const srow = document.createElement('div');
+        srow.className = 'cu-search';
+        searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.placeholder = p.searchPlaceholder || 'Search…';
+        srow.appendChild(searchInput);
+        card.appendChild(srow);
+      }
+
+      const grid = document.createElement('div');
+      grid.className = 'macro-grid';
+      let count = Math.floor(Math.min(740, window.innerWidth) / 120);
+      console.log('window width', window.innerWidth, 'count', count);
+      const n = (p.buttons || []).length;
+      // Columns match the number of buttons in this card (min 1).
+      grid.style.gridTemplateColumns = 'repeat(' + Math.min(count, Math.max(1, n)) + ',1fr)';
+
+      (p.buttons || []).forEach(btn => {
+        const b = document.createElement('button');
+        b.className = 'macro-btn';
+        // Prefer the Font Awesome icon, but only if FA actually loaded.
+        // Otherwise fall back to the SVG sprite icon (works offline).
+        if (btn.faIcon && faAvailable()) {
+          const span = document.createElement('span');
+          span.className = 'cu-btn-icon';
+          span.innerHTML = '<i class="'+escAttr(btn.faIcon)+'"></i>';
+          b.appendChild(span);
+        } else if (btn.icon) {
+          const span = document.createElement('span');
+          span.className = 'cu-btn-icon';
+          span.innerHTML = '<svg width="20" height="20"><use href="#'+btn.icon+'"></use></svg>';
+          b.appendChild(span);
+        }
+        if (btn.label) {
+          const lab = document.createElement('span');
+          lab.className = 'cu-btn-label';
+          lab.textContent = btn.label;
+          b.appendChild(lab);
+        }
+        if (!b.firstChild) b.textContent = btn.label || '(button)';
+        b.onclick = () => runSteps(resolveSteps(btn), searchInput);
+        grid.appendChild(b);
+      });
+      card.appendChild(grid);
+      panel.appendChild(card);
+    });
+    host.appendChild(panel);
+  });
+}
+
+function renderCustom() {
+  renderCustomTabs();
+  renderCustomPanels();
+}
+
+// ── Executing a button's step sequence ──────────────────────────────────────
+// searchEl (optional) is the card's search <input>; a 'search' step types its
+// current value, so the search term can be injected anywhere in the chain.
+// key/combo steps use the active-OS modifier via stepMod().
+// Normalise a timings value into an array of non-negative integers (microsecs).
+// Accepts either an array (from imported JSON) or a string the user pasted into
+// the editor ("9000, 4500, 560, 1690, ..."), tolerating commas/spaces/newlines.
+function parseTimings(v) {
+  if (Array.isArray(v)) return v.map(x => Math.max(0, x|0)).filter((x,i,a)=>true);
+  if (typeof v === 'string') {
+    return v.split(/[^0-9]+/).filter(s => s.length).map(s => Math.max(0, parseInt(s,10)||0));
+  }
+  return [];
+}
+
+async function runSteps(steps, searchEl) {
+  const verbose = getVerbose();
+  const q = { quiet: true };
+  if (verbose) logMsg('▶ running macro — ' + steps.length + ' step(s), OS: ' + getOs(), 'info');
+  let i = 0;
+  for (const s of steps) {
+    i++;
+    if (verbose) logMsg('  ' + i + '. ' + describeStep(s, searchEl), 'info');
+    if (s.t === 'combo' || s.t === 'key') {   // 'key' tolerated for old configs
+      await api('/api/combo', { modifier: stepMod(s), keys: [stepKey(s),0,0,0,0,0] }, q);
+      await delay(40);
+    } else if (s.t === 'text') {
+      await api('/api/text', { text: String(s.value || '') }, q);
+      await delay(60);
+    } else if (s.t === 'search') {
+      const term = searchEl ? searchEl.value : '';
+      if (term) { await api('/api/text', { text: String(term) }, q); await delay(60); }
+    } else if (s.t === 'delay') {
+      await delay(Math.max(0, Math.min(10000, s.ms|0)));
+    } else if (s.t === 'ir') {
+      // IR blaster. proto 'nec' sends a 32-bit code; otherwise raw mark/space
+      // microsecond timings (+ optional carrier, default 38000).
+      if (s.proto === 'nec') {
+        await api('/api/ir', { proto:'nec', code: (s.code>>>0) }, q);
+      } else {
+        const t = parseTimings(s.timings);
+        if (t.length) await api('/api/ir', { proto:'raw', carrier: (s.carrier|0)||38000, timings: t }, q);
+      }
+      await delay(80);
+    } else if (s.t === 'rf') {
+      // 433 MHz OOK: raw mark/gap microsecond timings, repeated `repeat` times.
+      const t = parseTimings(s.timings);
+      if (t.length) await api('/api/rf', { timings: t, repeat: (s.repeat|0)||6 }, q);
+      await delay(80);
+    }
+  }
+  logMsg('ran macro (' + steps.length + ' steps)', 'ok');
+}
+
+// ── Export / import ─────────────────────────────────────────────────────────
+function ceExport() {
+  const blob = new Blob([JSON.stringify(customCfg, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'nethid-custom.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  logMsg('exported custom config', 'ok');
+}
+
+function ceImport(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      if (!parsed || !Array.isArray(parsed.tabs)) throw new Error('not a NetHID config');
+      customCfg = normalizeStepTypes(parsed);
+      customSave();
+      renderCustom();
+      renderEditor();
+      logMsg('imported ' + customCfg.tabs.length + ' tab(s)', 'ok');
+    } catch (e) {
+      logMsg('import failed: ' + e.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+  ev.target.value = '';
+}
+
+// ── Editor: build/edit tabs, panels, buttons, steps ─────────────────────────
+function ceAddTab() {
+  customCfg.tabs.push({ id: uid(), name: 'New Tab', panels: [] });
+  customSave(); renderCustom(); renderEditor();
+}
+function ceDelTab(ti) {
+  if (!confirm('Delete this tab and all its panels?')) return;
+  customCfg.tabs.splice(ti,1);
+  customSave(); renderCustom(); renderEditor();
+}
+function ceRenameTab(ti, v) { customCfg.tabs[ti].name = v; customSave(); renderCustomTabs(); }
+
+// Export a single tab as its own JSON file (atomic tab sharing).
+function ceExportTab(ti) {
+  const tab = customCfg.tabs[ti];
+  const out = { version: 1, tabs: [ JSON.parse(JSON.stringify(tab)) ] };
+  const blob = new Blob([JSON.stringify(out, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'nethid-' + (tab.name||'tab').replace(/[^a-z0-9]+/gi,'-').toLowerCase() + '.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+  logMsg('exported tab "' + (tab.name||'') + '"', 'ok');
+}
+
+// Import panels from a JSON file INTO an existing tab (append).
+// Accepts either a full config (uses tabs[].panels of all tabs) or a bare
+// array of panels, and appends them to the target tab.
+let _importPanelsTarget = null;
+function ceImportPanelsPick(ti) {
+  _importPanelsTarget = ti;
+  document.getElementById('cePanelsFile').click();
+}
+function ceImportPanels(ev) {
+  const file = ev.target.files && ev.target.files[0];
+  const ti = _importPanelsTarget;
+  ev.target.value = '';
+  if (!file || ti == null) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(reader.result);
+      let panels = [];
+      if (Array.isArray(parsed)) panels = parsed;                       // bare panel array
+      else if (Array.isArray(parsed.panels)) panels = parsed.panels;    // single tab object
+      else if (Array.isArray(parsed.tabs)) {                            // full config
+        parsed.tabs.forEach(t => { if (Array.isArray(t.panels)) panels = panels.concat(t.panels); });
+      }
+      if (!panels.length) throw new Error('no panels found in file');
+      customCfg.tabs[ti].panels = customCfg.tabs[ti].panels.concat(panels);
+      normalizeStepTypes(customCfg);   // migrate any combo→key in the imported panels
+      customSave(); renderCustom(); renderEditor();
+      logMsg('imported ' + panels.length + ' panel(s) into "' + (customCfg.tabs[ti].name||'') + '"', 'ok');
+    } catch (e) {
+      logMsg('panel import failed: ' + e.message, 'err');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// Collapse state for the editor (UI-only, not persisted to the config).
+const ceCollapsed = { tabs: {}, panels: {} };
+function ceToggleTab(ti)    { ceCollapsed.tabs[ti]   = !ceCollapsed.tabs[ti];   renderEditor(); }
+function ceTogglePanel(ti,pi){ const k=ti+':'+pi; ceCollapsed.panels[k] = !ceCollapsed.panels[k]; renderEditor(); }
+
+function ceAddPanel(ti) {
+  customCfg.tabs[ti].panels.push({ title:'New Group', buttons:[] });
+  customSave(); renderCustom(); renderEditor();
+}
+function ceDelPanel(ti,pi) {
+  customCfg.tabs[ti].panels.splice(pi,1);
+  customSave(); renderCustom(); renderEditor();
+}
+function ceRenamePanel(ti,pi,v) { customCfg.tabs[ti].panels[pi].title = v; customSave(); renderCustomPanels(); }
+function ceTogglePanelSearch(ti,pi,on) {
+  customCfg.tabs[ti].panels[pi].search = !!on;
+  customSave(); renderCustom(); renderEditor();
+}
+function ceSetSearchPlaceholder(ti,pi,v) {
+  customCfg.tabs[ti].panels[pi].searchPlaceholder = v; customSave(); renderCustomPanels();
+}
+
+function ceAddButton(ti,pi) {
+  customCfg.tabs[ti].panels[pi].buttons.push({ label:'Button', icon:'', steps:[] });
+  customSave(); renderCustom(); renderEditor();
+}
+function ceDelButton(ti,pi,bi) {
+  customCfg.tabs[ti].panels[pi].buttons.splice(bi,1);
+  customSave(); renderCustom(); renderEditor();
+}
+function ceRenameButton(ti,pi,bi,v) { customCfg.tabs[ti].panels[pi].buttons[bi].label = v; customSave(); renderCustomPanels(); }
+function ceSetButtonIcon(ti,pi,bi,v) { customCfg.tabs[ti].panels[pi].buttons[bi].icon = v; customSave(); renderCustomPanels(); }
+function ceSetButtonFa(ti,pi,bi,v) {
+  const b = customCfg.tabs[ti].panels[pi].buttons[bi];
+  v = (v||'').trim();
+  if (v) b.faIcon = v; else delete b.faIcon;
+  customSave(); renderCustomPanels();
+}
+
+// ── Per-button chains (OS-tagged step sequences) ────────────────────────────
+// A button holds one or more chains, each tagged with an OS ('all' or a
+// specific OS). Firing runs every chain whose OS matches the host (see
+// resolveSteps). The editor migrates legacy buttons (steps / stepsByOs) into
+// this shape on first view so everything is editable uniformly.
+function ceEnsureChains(b) {
+  if (Array.isArray(b.chains)) return b.chains;
+  const chains = [];
+  if (b.stepsByOs && typeof b.stepsByOs === 'object') {
+    ['windows','mac','linux'].forEach(os => {
+      if (Array.isArray(b.stepsByOs[os])) chains.push({ os, steps: b.stepsByOs[os] });
+    });
+    // If there were also default steps not represented, keep them as an 'all' chain.
+    if (Array.isArray(b.steps) && b.steps.length && !chains.length) chains.push({ os:'all', steps:b.steps });
+  } else if (Array.isArray(b.steps)) {
+    chains.push({ os:'all', steps:b.steps });
+  }
+  if (!chains.length) chains.push({ os:'all', steps:[] });
+  b.chains = chains;
+  delete b.steps; delete b.stepsByOs;
+  return b.chains;
+}
+function ceChain(ti,pi,bi,ci) {
+  const b = customCfg.tabs[ti].panels[pi].buttons[bi];
+  const chains = ceEnsureChains(b);
+  if (!chains[ci]) chains[ci] = { os:'all', steps:[] };
+  if (!Array.isArray(chains[ci].steps)) chains[ci].steps = [];
+  return chains[ci];
+}
+function ceChainSteps(ti,pi,bi,ci) { return ceChain(ti,pi,bi,ci).steps; }
+
+function ceAddChain(ti,pi,bi) {
+  const b = customCfg.tabs[ti].panels[pi].buttons[bi];
+  ceEnsureChains(b).push({ os:'all', steps:[] });
+  customSave(); renderEditor();
+}
+function ceDelChain(ti,pi,bi,ci) {
+  const b = customCfg.tabs[ti].panels[pi].buttons[bi];
+  const chains = ceEnsureChains(b);
+  chains.splice(ci,1);
+  if (!chains.length) chains.push({ os:'all', steps:[] });
+  customSave(); renderCustom(); renderEditor();
+}
+function ceSetChainOs(ti,pi,bi,ci,os) {
+  const chain = ceChain(ti,pi,bi,ci);
+  const old = chain.os || 'all';
+  if (old !== os) {
+    // Carry the current combos across the OS change, and normalize storage:
+    //  - OS-specific chains keep a single combo in the step's plain mod/key.
+    //  - "All OS" chains keep three values in modByOs/keyByOs.
+    (chain.steps||[]).forEach(s => {
+      if (s.t !== 'key' && s.t !== 'combo') return;
+      if (os === 'all') {
+        // Expand the single combo to all three OS rows so nothing is lost.
+        const baseMod = (s.modByOs && typeof s.modByOs[old]==='number') ? s.modByOs[old] : (s.mod|0);
+        const baseKey = (s.keyByOs && typeof s.keyByOs[old]==='number') ? s.keyByOs[old] : (s.key|0);
+        s.mod = baseMod; s.key = baseKey;
+        s.modByOs = { windows:baseMod, mac:baseMod, linux:baseMod };
+        s.keyByOs = { windows:baseKey, mac:baseKey, linux:baseKey };
+      } else {
+        // Collapse to a single plain combo, carrying the current value over.
+        // From "all": take the value that was shown for the OS we're moving to.
+        // From another specific OS: the value already lives in mod/key.
+        const srcOs = (old === 'all') ? os : old;
+        const baseMod = (s.modByOs && typeof s.modByOs[srcOs]==='number') ? s.modByOs[srcOs] : (s.mod|0);
+        const baseKey = (s.keyByOs && typeof s.keyByOs[srcOs]==='number') ? s.keyByOs[srcOs] : (s.key|0);
+        s.mod = baseMod; s.key = baseKey;
+        delete s.modByOs; delete s.keyByOs;
+      }
+    });
+  }
+  chain.os = os;
+  customSave(); renderEditor();
+}
+function ceMoveChain(ti,pi,bi,ci,dir) {
+  const b = customCfg.tabs[ti].panels[pi].buttons[bi];
+  if (arrMove(ceEnsureChains(b), ci, dir)) { customSave(); renderEditor(); }
+}
+
+function ceAddStep(ti,pi,bi,ci,type) {
+  const steps = ceChainSteps(ti,pi,bi,ci);
+  if (type==='combo' || type==='key') steps.push({t:'combo', mod:0, key:KEY_CODES['a']});
+  if (type==='text')   steps.push({t:'text',  value:''});
+  if (type==='search') steps.push({t:'search'});
+  if (type==='delay')  steps.push({t:'delay', ms:250});
+  if (type==='ir')     steps.push({t:'ir', proto:'raw', carrier:38000, timings:''});
+  if (type==='rf')     steps.push({t:'rf', repeat:6, timings:''});
+  customSave(); renderEditor();
+}
+function ceDelStep(ti,pi,bi,ci,si) {
+  ceChainSteps(ti,pi,bi,ci).splice(si,1);
+  customSave(); renderCustom(); renderEditor();
+}
+function ceSetStep(ti,pi,bi,ci,si,field,val) {
+  const s = ceChainSteps(ti,pi,bi,ci)[si];
+  if (field==='key')     s.key = parseInt(val,10);
+  if (field==='value')   s.value = val;
+  if (field==='ms')      s.ms = parseInt(val,10)||0;
+  if (field==='proto')   s.proto = val;
+  if (field==='carrier') s.carrier = parseInt(val,10)||38000;
+  if (field==='repeat')  s.repeat = Math.max(1, Math.min(50, parseInt(val,10)||1));
+  if (field==='timings') s.timings = val;   // kept as a string; parsed at send
+  customSave();
+}
+// Parse an IR NEC code typed as decimal or 0x-prefixed hex into a u32.
+function ceSetIrCode(ti,pi,bi,ci,si,val) {
+  const s = ceChainSteps(ti,pi,bi,ci)[si];
+  const txt = String(val).trim();
+  let n = /^0x/i.test(txt) ? parseInt(txt,16) : parseInt(txt,10);
+  if (!isFinite(n) || n < 0) n = 0;
+  s.code = n >>> 0;
+  customSave();
+}
+
+// ── Reordering (move up/down within the containing array) ───────────────────
+// dir is -1 (up/earlier) or +1 (down/later). Out-of-range moves are no-ops.
+function arrMove(arr, i, dir) {
+  const j = i + dir;
+  if (!Array.isArray(arr) || j < 0 || j >= arr.length) return false;
+  const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+  return true;
+}
+function ceMoveTab(ti, dir) {
+  if (arrMove(customCfg.tabs, ti, dir)) {
+    // collapse-state is keyed by index, so it would no longer line up after a
+    // move; clear it to avoid the wrong rows appearing collapsed.
+    ceCollapsed.tabs = {}; ceCollapsed.panels = {};
+    customSave(); renderCustom(); renderEditor();
+  }
+}
+function ceMovePanel(ti, pi, dir) {
+  if (arrMove(customCfg.tabs[ti].panels, pi, dir)) {
+    ceCollapsed.panels = {};
+    customSave(); renderCustom(); renderEditor();
+  }
+}
+function ceMoveButton(ti, pi, bi, dir) {
+  if (arrMove(customCfg.tabs[ti].panels[pi].buttons, bi, dir)) {
+    customSave(); renderCustom(); renderEditor();
+  }
+}
+function ceMoveStep(ti, pi, bi, ci, si, dir) {
+  if (arrMove(ceChainSteps(ti,pi,bi,ci), si, dir)) {
+    customSave(); renderCustom(); renderEditor();
+  }
+}
+
+// Toggle a modifier bit for a key/combo step under a specific OS. The active
+// OS's set is what fires; all three are editable side by side. We always write
+// into modByOs so each OS is independent; mod stays as a fallback default.
+function ceToggleModOs(ti,pi,bi,ci,si,os,bit,on) {
+  const s = ceChainSteps(ti,pi,bi,ci)[si];
+  if (!s.modByOs) {
+    s.modByOs = { windows: s.mod|0, mac: s.mod|0, linux: s.mod|0 };
+  }
+  s.modByOs[os] = on ? ((s.modByOs[os]|0)|bit) : ((s.modByOs[os]|0)&~bit);
+  customSave();
+}
+
+// Set the keycode for a key/combo step under a specific OS. Seeds keyByOs from
+// the existing default key so the other OSes keep their current key.
+function ceSetKeyOs(ti,pi,bi,ci,si,os,val) {
+  const s = ceChainSteps(ti,pi,bi,ci)[si];
+  if (!s.keyByOs) {
+    s.keyByOs = { windows: s.key|0, mac: s.key|0, linux: s.key|0 };
+  }
+  s.keyByOs[os] = parseInt(val,10) || 0;
+  customSave();
+}
+
+// Single-OS chain helpers: edit the step's plain mod/key directly (no per-OS
+// maps, because the chain itself is tagged with one OS).
+function ceToggleModPlain(ti,pi,bi,ci,si,bit,on) {
+  const s = ceChainSteps(ti,pi,bi,ci)[si];
+  s.mod = on ? ((s.mod|0)|bit) : ((s.mod|0)&~bit);
+  customSave();
+}
+function keyOptionsHtml(selected) {
+  let html = '';
+  Object.keys(KEY_CODES).forEach(name => {
+    const v = KEY_CODES[name];
+    const sel = (v === selected) ? ' selected' : '';
+    let label = (name === ' ') ? 'SPACE' : name;
+    html += '<option value="'+v+'"'+sel+'>'+label.replace(/</g,'&lt;')+'</option>';
+  });
+  return html;
+}
+
+function iconOptionsHtml(selected) {
+  let html = '';
+  CUSTOM_ICONS.forEach(id => {
+    const sel = (id === (selected||'')) ? ' selected' : '';
+    const label = id ? id.replace('icon-','') : '(none)';
+    html += '<option value="'+id+'"'+sel+'>'+label+'</option>';
+  });
+  return html;
+}
+
+function renderEditor() {
+  const host = document.getElementById('ceEditor');
+  const hint = document.getElementById('ceHint');
+  if (!host) return;
+  hint.style.display = customCfg.tabs.length ? 'none' : 'block';
+  host.innerHTML = '';
+  // keep the OS selector reflecting the stored value
+  const osSel = document.getElementById('osSelect');
+  if (osSel) osSel.value = getOs();
+
+  customCfg.tabs.forEach((tab,ti) => {
+    const tabBox = document.createElement('div');
+    tabBox.className = 'ce-tab';
+    const tabCollapsed = !!ceCollapsed.tabs[ti];
+    const nPanels = (tab.panels||[]).length;
+
+    // Tab header: click title to collapse/expand
+    const tabUp = ti > 0, tabDown = ti < customCfg.tabs.length - 1;
+    let head =
+      '<div class="ce-head">'
+      + '<button class="ce-caret" onclick="ceToggleTab('+ti+')">'+(tabCollapsed?'\u25B6':'\u25BC')+'</button>'
+      + '<input class="ce-name" value="'+escAttr(tab.name)+'" '
+      +   'onclick="event.stopPropagation()" onchange="ceRenameTab('+ti+',this.value)">'
+      + '<span class="ce-count">'+nPanels+' group'+(nPanels===1?'':'s')+'</span>'
+      + '<button class="ce-move" '+(tabUp?'':'disabled ')+'onclick="ceMoveTab('+ti+',-1)" title="Move tab up">\u25B2</button>'
+      + '<button class="ce-move" '+(tabDown?'':'disabled ')+'onclick="ceMoveTab('+ti+',1)" title="Move tab down">\u25BC</button>'
+      + '<button class="ce-mini" onclick="ceExportTab('+ti+')" title="Export this tab">export</button>'
+      + '<button class="ce-mini" onclick="ceImportPanelsPick('+ti+')" title="Import panels into this tab">+panels</button>'
+      + '<button class="ce-x" onclick="ceDelTab('+ti+')">\u2715</button>'
+      + '</div>';
+    tabBox.innerHTML = head;
+
+    if (!tabCollapsed) {
+      const body = document.createElement('div');
+      body.className = 'ce-tabbody';
+      (tab.panels||[]).forEach((p,pi) => {
+        const panelBox = document.createElement('div');
+        panelBox.className = 'ce-panel';
+        const pKey = ti+':'+pi;
+        const pCollapsed = !!ceCollapsed.panels[pKey];
+        const nBtns = (p.buttons||[]).length;
+        const pUp = pi > 0, pDown = pi < (tab.panels.length - 1);
+        let h =
+          '<div class="ce-head">'
+          + '<button class="ce-caret" onclick="ceTogglePanel('+ti+','+pi+')">'+(pCollapsed?'\u25B6':'\u25BC')+'</button>'
+          + '<input class="ce-name" value="'+escAttr(p.title)+'" '
+          +   'onclick="event.stopPropagation()" onchange="ceRenamePanel('+ti+','+pi+',this.value)">'
+          + '<span class="ce-count">'+nBtns+' btn'+(nBtns===1?'':'s')+'</span>'
+          + '<button class="ce-move" '+(pUp?'':'disabled ')+'onclick="ceMovePanel('+ti+','+pi+',-1)" title="Move group up">\u25B2</button>'
+          + '<button class="ce-move" '+(pDown?'':'disabled ')+'onclick="ceMovePanel('+ti+','+pi+',1)" title="Move group down">\u25BC</button>'
+          + '<button class="ce-x" onclick="ceDelPanel('+ti+','+pi+')">\u2715</button>'
+          + '</div>';
+
+        if (!pCollapsed) {
+          h += '<div class="ce-row ce-searchrow">'
+            + '<label class="ce-mod"><input type="checkbox" '+(p.search?'checked':'')+' '
+            +   'onchange="ceTogglePanelSearch('+ti+','+pi+',this.checked)">search box</label>'
+            + (p.search
+                ? '<input class="ce-stepin" value="'+escAttr(p.searchPlaceholder||'')+'" '
+                  + 'placeholder="search placeholder" '
+                  + 'oninput="ceSetSearchPlaceholder('+ti+','+pi+',this.value)">'
+                : '')
+            + '</div>';
+          (p.buttons||[]).forEach((btn,bi) => {
+            const bUp = bi > 0, bDown = bi < (p.buttons.length - 1);
+            h += '<div class="ce-btn">'
+              + '<div class="ce-row">'
+              + '<select class="ce-iconsel" onchange="ceSetButtonIcon('+ti+','+pi+','+bi+',this.value)" title="sprite icon">'
+              +   iconOptionsHtml(btn.icon) + '</select>'
+              + '<input class="ce-name" value="'+escAttr(btn.label)+'" '
+              +   'onchange="ceRenameButton('+ti+','+pi+','+bi+',this.value)">'
+              + '<button class="ce-move" '+(bUp?'':'disabled ')+'onclick="ceMoveButton('+ti+','+pi+','+bi+',-1)" title="Move button up">\u25B2</button>'
+              + '<button class="ce-move" '+(bDown?'':'disabled ')+'onclick="ceMoveButton('+ti+','+pi+','+bi+',1)" title="Move button down">\u25BC</button>'
+              + '<button class="ce-x" onclick="ceDelButton('+ti+','+pi+','+bi+')">\u2715</button>'
+              + '</div>'
+              // Font Awesome class field (overrides sprite icon when set)
+              + '<div class="ce-row">'
+              + '<span class="ce-fieldlbl">FA icon</span>'
+              + '<input class="ce-stepin" value="'+escAttr(btn.faIcon||'')+'" '
+              +   'placeholder="e.g. fa-solid fa-bolt" '
+              +   'oninput="ceSetButtonFa('+ti+','+pi+','+bi+',this.value)">'
+              + '</div>';
+
+            // One or more chains. Each is tagged with an OS; on press, every
+            // chain whose OS matches the host (or is "All") runs, in order.
+            const chains = ceEnsureChains(btn);
+            const osOpt = (cur) =>
+                '<option value="all"'    +(cur==='all'?' selected':'')    +'>All OS</option>'
+              + '<option value="windows"'+(cur==='windows'?' selected':'')+'>Windows</option>'
+              + '<option value="mac"'    +(cur==='mac'?' selected':'')    +'>macOS</option>'
+              + '<option value="linux"'  +(cur==='linux'?' selected':'')  +'>Linux</option>';
+            chains.forEach((chain, ci) => {
+              const cUp = ci > 0, cDown = ci < chains.length - 1;
+              const steps = Array.isArray(chain.steps) ? chain.steps : [];
+              h += '<div class="ce-chain">'
+                + '<div class="ce-row ce-chainhead">'
+                + '<span class="ce-fieldlbl">Run on</span>'
+                + '<select class="ce-varsel" onchange="ceSetChainOs('+ti+','+pi+','+bi+','+ci+',this.value)">'
+                +   osOpt(chain.os||'all') + '</select>'
+                + '<button class="ce-move" '+(cUp?'':'disabled ')+'onclick="ceMoveChain('+ti+','+pi+','+bi+','+ci+',-1)" title="Move chain up">\u25B2</button>'
+                + '<button class="ce-move" '+(cDown?'':'disabled ')+'onclick="ceMoveChain('+ti+','+pi+','+bi+','+ci+',1)" title="Move chain down">\u25BC</button>'
+                + '<button class="ce-x" '+(chains.length<=1?'disabled ':'')+'onclick="ceDelChain('+ti+','+pi+','+bi+','+ci+')" title="Remove this chain">\u2715</button>'
+                + '</div>';
+              steps.forEach((s,si) => {
+                h += '<div class="ce-step">' + renderStep(ti,pi,bi,ci,si,s,steps.length,chain.os||'all') + '</div>';
+              });
+              h += '<div class="ce-steprow">'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'combo\')">+ combo</button>'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'text\')">+ text</button>'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'search\')">+ search</button>'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'delay\')">+ delay</button>'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'ir\')">+ IR</button>'
+                + '<button class="ce-add" onclick="ceAddStep('+ti+','+pi+','+bi+','+ci+',\'rf\')">+ RF</button>'
+                + '</div>'
+                + '</div>';
+            });
+            h += '<button class="ce-add ce-addchain" onclick="ceAddChain('+ti+','+pi+','+bi+')">+ Add OS chain</button>';
+            h += '</div>';
+          });
+          h += '<button class="ce-add" onclick="ceAddButton('+ti+','+pi+')">+ Add Button</button>';
+        }
+        panelBox.innerHTML = h;
+        body.appendChild(panelBox);
+      });
+      const addPanelBtn = document.createElement('button');
+      addPanelBtn.className = 'ce-add';
+      addPanelBtn.textContent = '+ Add Group';
+      addPanelBtn.onclick = () => ceAddPanel(ti);
+      body.appendChild(addPanelBtn);
+      tabBox.appendChild(body);
+    }
+    host.appendChild(tabBox);
+  });
+}
+
+function renderStep(ti,pi,bi,ci,si,s,nSteps,chainOs) {
+  const path = ti+','+pi+','+bi+','+ci+','+si;
+  // Move up/down buttons shared by every step type, placed before the delete ✕.
+  const up = si > 0, down = si < (nSteps - 1);
+  const moveBtns =
+    '<button class="ce-move" '+(up?'':'disabled ')+'onclick="ceMoveStep('+path+',-1)" title="Move step up">\u25B2</button>'
+    + '<button class="ce-move" '+(down?'':'disabled ')+'onclick="ceMoveStep('+path+',1)" title="Move step down">\u25BC</button>';
+  if (s.t === 'text') {
+    return 'Type <input class="ce-stepin" value="'+escAttr(escForBox(s.value||''))+'" '
+      + 'oninput="ceSetText('+path+',this.value)" placeholder="text, use \\n for Enter, \\t for Tab">'
+      + moveBtns
+      + '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>';
+  }
+  if (s.t === 'search') {
+    return '<span class="ce-searchstep">Type the search-box term here</span>'
+      + moveBtns
+      + '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>';
+  }
+  if (s.t === 'delay') {
+    return 'Wait <input type="number" class="ce-stepnum" value="'+(s.ms|0)+'" min="0" max="10000" '
+      + 'oninput="ceSetStep('+path+',\'ms\',this.value)"> ms'
+      + moveBtns
+      + '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>';
+  }
+  if (s.t === 'ir') {
+    const isNec = (s.proto === 'nec');
+    const timingsStr = Array.isArray(s.timings) ? s.timings.join(', ') : (s.timings||'');
+    return '<div class="ce-sig">'
+      + '<div class="ce-row"><span class="ce-steptype">IR</span>'
+      +   '<select class="ce-varsel" onchange="ceSetStep('+path+',\'proto\',this.value)">'
+      +     '<option value="raw"'+(isNec?'':' selected')+'>Raw timings</option>'
+      +     '<option value="nec"'+(isNec?' selected':'')+'>NEC code</option>'
+      +   '</select>'
+      +   moveBtns
+      +   '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>'
+      + '</div>'
+      + (isNec
+          ? '<div class="ce-row"><span class="ce-fieldlbl">NEC code</span>'
+            + '<input class="ce-stepin" value="'+escAttr(s.code!=null?s.code:'')+'" '
+            + 'placeholder="e.g. 3772793023 or 0xE0E040BF" '
+            + 'oninput="ceSetIrCode('+path+',this.value)"></div>'
+          : '<div class="ce-row"><span class="ce-fieldlbl">Carrier</span>'
+            + '<input type="number" class="ce-stepnum" value="'+((s.carrier|0)||38000)+'" '
+            + 'oninput="ceSetStep('+path+',\'carrier\',this.value)"> Hz</div>'
+            + '<div class="ce-row"><span class="ce-fieldlbl">Timings µs</span>'
+            + '<textarea class="ce-sigta" placeholder="mark, space, mark, space, …" '
+            + 'oninput="ceSetStep('+path+',\'timings\',this.value)">'+escHtml(timingsStr)+'</textarea></div>')
+      + '</div>';
+  }
+  if (s.t === 'rf') {
+    const timingsStr = Array.isArray(s.timings) ? s.timings.join(', ') : (s.timings||'');
+    return '<div class="ce-sig">'
+      + '<div class="ce-row"><span class="ce-steptype">RF 433</span>'
+      +   '<span class="ce-fieldlbl">repeat</span>'
+      +   '<input type="number" class="ce-stepnum" value="'+((s.repeat|0)||6)+'" min="1" max="50" '
+      +   'oninput="ceSetStep('+path+',\'repeat\',this.value)">'
+      +   moveBtns
+      +   '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>'
+      + '</div>'
+      + '<div class="ce-row"><span class="ce-fieldlbl">Timings µs</span>'
+      + '<textarea class="ce-sigta" placeholder="mark, gap, mark, gap, …" '
+      + 'oninput="ceSetStep('+path+',\'timings\',this.value)">'+escHtml(timingsStr)+'</textarea></div>'
+      + '</div>';
+  }
+  // key / combo step. For an "All OS" chain we show three rows (Win/Mac/Linux)
+  // because the step may differ per host; the values live in modByOs/keyByOs.
+  // For an OS-specific chain we show a SINGLE row for that chain's OS, stored in
+  // the step's plain mod/key (the chain already encodes which OS it's for).
+  const OSLBL = { windows:'Windows', mac:'macOS', linux:'Linux' };
+  if (chainOs && chainOs !== 'all') {
+    const m = s.mod|0;
+    const active = (chainOs === getOs());   // highlight only if it matches the host
+    const tog = (bit,t) =>
+      '<label class="ce-mod"><input type="checkbox" '+((m&bit)?'checked':'')+' '
+      + 'onchange="ceToggleModPlain('+path+','+bit+',this.checked)">'+t+'</label>';
+    return '<div class="ce-keystep">'
+      + '<div class="ce-keyhead">'
+      +   '<span class="ce-steptype">'+'Combo'+'</span>'
+      +   moveBtns
+      +   '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>'
+      + '</div>'
+      + '<div class="ce-osmod'+(active?' ce-osmod-active':'')+'">'
+      +   '<span class="ce-osmodlbl">'+(OSLBL[chainOs]||chainOs)+'</span>'
+      +   tog(0x01,'Ctrl') + tog(0x02,'Shift') + tog(0x04,'Alt') + tog(0x08,'Gui')
+      +   '<select class="ce-stepsel" onchange="ceSetStep('+path+',\'key\',this.value)">'
+      +     keyOptionsHtml(s.key|0) + '</select>'
+      + '</div>'
+      + '</div>';
+  }
+  // "All OS" chain: three rows. The active host OS row is highlighted.
+  const activeOs = getOs();
+  const modFor = (os) => (s.modByOs && typeof s.modByOs[os]==='number') ? (s.modByOs[os]|0) : (s.mod|0);
+  const keyFor = (os) => (s.keyByOs && typeof s.keyByOs[os]==='number') ? (s.keyByOs[os]|0) : (s.key|0);
+  const osRow = (os, lbl) => {
+    const m = modFor(os);
+    const tog = (bit,t) =>
+      '<label class="ce-mod"><input type="checkbox" '+((m&bit)?'checked':'')+' '
+      + 'onchange="ceToggleModOs('+path+',\''+os+'\','+bit+',this.checked)">'+t+'</label>';
+    return '<div class="ce-osmod'+(os===activeOs?' ce-osmod-active':'')+'">'
+      + '<span class="ce-osmodlbl">'+lbl+'</span>'
+      + tog(0x01,'Ctrl') + tog(0x02,'Shift') + tog(0x04,'Alt') + tog(0x08,'Gui')
+      + '<select class="ce-stepsel" onchange="ceSetKeyOs('+path+',\''+os+'\',this.value)">'
+      +   keyOptionsHtml(keyFor(os)) + '</select>'
+      + '</div>';
+  };
+  return '<div class="ce-keystep">'
+    + '<div class="ce-keyhead">'
+    +   '<span class="ce-steptype">'+'Combo'+'</span>'
+    +   moveBtns
+    +   '<button class="ce-x" onclick="ceDelStep('+path+')">\u2715</button>'
+    + '</div>'
+    + osRow('windows','Win') + osRow('mac','Mac') + osRow('linux','Linux')
+    + '</div>';
+}
+
+function escAttr(v) {
+  return String(v==null?'':v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+// Escape for element text content (e.g. inside a <textarea>).
+function escHtml(v) {
+  return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Visible-escape helpers for the text-step box ─────────────────────────────
+// The text step stores REAL characters in s.value (a real newline/tab), so that
+// import/export/sending all work through normal JSON escaping. But a real
+// newline can't be shown or typed in a single-line input. So the editor box
+// shows escape SEQUENCES: escForBox turns real control chars into visible
+// "\n"/"\t" for display; unescFromBox turns typed "\n"/"\t" back into the real
+// characters before storing. "\\" is a literal backslash either way.
+function escForBox(s) {
+  return String(s==null?'':s)
+    .replace(/\\/g, '\\\\')   // backslash first so the next replaces don't double-up
+    .replace(/\n/g, '\\n')
+    .replace(/\t/g, '\\t');
+}
+function unescFromBox(s) {
+  let out = '';
+  s = String(s==null?'':s);
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && i + 1 < s.length) {
+      const n = s[i+1];
+      if      (n === 'n')  { out += '\n'; i++; }
+      else if (n === 't')  { out += '\t'; i++; }
+      else if (n === '\\') { out += '\\'; i++; }
+      else                 { out += s[i]; }   // keep stray backslash as-is
+    } else {
+      out += s[i];
+    }
+  }
+  return out;
+}
+// Store a text-step value typed into the editor box: decode visible escapes to
+// the real characters that will actually be sent/typed.
+function ceSetText(ti,pi,bi,ci,si,raw) {
+  ceChainSteps(ti,pi,bi,ci)[si].value = unescFromBox(raw);
+  customSave();
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+buildKeyboard();
+buildMacros();
+buildTabBar();
+customLoad();
+renderCustom();
+// Activate the first served tab (prefer a real tab over the "+ CUSTOM" chip).
+(function(){
+  let first = document.querySelector('.panel[data-tabname]:not([data-tabkind="add"])')
+           || document.querySelector('.panel[data-tabname]');
+  if (first) switchTab(first.getAttribute('data-tabname'));
+})();
+// Reflect the stored OS in the selector
+(function(){ syncOsSelector(); })();
+
+// The Font Awesome stylesheet loads asynchronously from a CDN. The first
+// render may run before it arrives, so re-check and re-render once it's ready
+// (and again shortly after as a fallback for the load event being missed).
+(function(){
+  function recheck(){ _faChecked = false; renderCustom(); }
+  const link = document.querySelector('link[href*="font-awesome"]');
+  if (link) link.addEventListener('load', recheck);
+  // Fallback: re-check a moment later in case the load event already fired
+  // or isn't delivered for cached/cross-origin stylesheets.
+  setTimeout(recheck, 1200);
+})();
+
+const seekSlider = document.getElementById('seekSlider');
+const seekValue = document.getElementById('seekValue');
+if (seekSlider) {
+  seekSlider.addEventListener('input', () => {
+    seekValue.textContent = seekSlider.value + '%';
+  });
+  seekSlider.addEventListener('change', () => {
+    let bucket = Math.round(seekSlider.value / 10);
+    if (bucket < 0) bucket = 0;
+    if (bucket > 9) bucket = 9;
+    const digitMap = [
+      '0','1','2','3','4',
+      '5','6','7','8','9'
+    ];
+    mediaKey(digitMap[bucket]);
+  });
+}
+const mediaSearch = document.getElementById('mediaSearch');
+if (mediaSearch) {
+  mediaSearch.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      sendMediaSearch();
+    }
+  });
+}
+// ── Keep-alive / inactivity ──────────────────────────────────────────────────
+// The device expires a session after SESSION_TIMEOUT_S (default 5 min) of no
+// validated request. /api/ping validates the token, so each ping both checks
+// the connection AND refreshes the session. To make the timeout a true
+// INACTIVITY timeout, we only ping while the user has interacted recently:
+// keep using the UI and the session stays alive; walk away and ~5 min after
+// your last interaction the device idles the session out and the next action
+// prompts for the password again.
+let lastUserActivity = Date.now();
+function markActivity() { lastUserActivity = Date.now(); }
+['pointerdown','keydown','touchstart','wheel'].forEach(ev =>
+  window.addEventListener(ev, markActivity, { passive: true }));
+
+ping();   // initial connection check / status dot
+detectHostOs();   // auto-set Windows if the USB host was detected as Windows
+// Every 12 s (comfortably under the server's keep-alive idle reaper): if the user
+// has interacted within the last 4 minutes, ping to refresh both the status dot
+// and the session, and to keep the warm connection from being reaped during brief
+// pauses. Once idle longer than that we stop, letting the session expire.
+setInterval(() => {
+  if (Date.now() - lastUserActivity < 4 * 60 * 1000) ping();
+}, 12000);
+</script>
+</body>
+</html>
+

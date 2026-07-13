@@ -1,0 +1,52 @@
+; ============================================================
+;  rf_ook.pio — 433 MHz OOK (on-off keying) pulse player for the MX-FS-03V.
+;
+;  The MX-FS-03V keys its RF carrier directly from the logic level on its DATA
+;  pin: DATA high = carrier on, DATA low = carrier off. So to replay a captured
+;  remote we just drive the pin high/low for the captured pulse/gap durations.
+;
+;  Protocol between CPU and this SM:
+;    The CPU pushes one 32-bit word per pulse = the number of PIO clock ticks to
+;    hold the CURRENT level. The level alternates every word, starting HIGH.
+;    So the timing array is [mark, gap, mark, gap, ...] in ticks.
+;    A word of 0 is treated as "end" by the C driver (it stops pushing).
+;
+;  The C side sets the clock divider so 1 tick = 1 microsecond (see rf.cpp),
+;  which means durations are passed in microseconds directly. Max pulse ~ 65 ms
+;  (fits in 32 bits comfortably; OOK pulses are sub-millisecond in practice).
+; ============================================================
+
+.program rf_ook
+.side_set 1 opt
+
+.wrap_target
+    out x, 32        side 1          ; pull mark duration into X, drive pin HIGH
+mark_loop:
+    jmp x-- mark_loop                ; hold HIGH for X ticks
+    out x, 32        side 0          ; pull gap duration into X, drive pin LOW
+gap_loop:
+    jmp x-- gap_loop                 ; hold LOW for X ticks
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// Initialise the OOK SM on `pin`, with 1 tick ≈ 1 microsecond.
+static inline void rf_ook_program_init(PIO pio, uint sm, uint offset, uint pin) {
+    pio_sm_config c = rf_ook_program_get_default_config(offset);
+
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, true, 32);   // shift right, autopull at 32 bits
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);  // deeper TX FIFO
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    // Clock divider: each `jmp x--` is 1 PIO cycle, so target 1 MHz -> 1us/tick.
+    float div = (float)clock_get_hz(clk_sys) / 1000000.0f;
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

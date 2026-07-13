@@ -1,0 +1,10 @@
+// server_cert.h.example — placeholder. The REAL include/server_cert.h is
+// generated from your certificate + private key and must NOT be committed
+// (it contains the private key). Generate it with one of:
+//   ./tools/make-cert-mkcert.sh nethid.example.com        # long-lived, local CA
+//   ./tools/make-cert-letsencrypt.sh nethid.example.com   # public, Cloudflare DNS-01
+// Both call tools/gen_cert_header.py to produce include/server_cert.h.
+//
+// Only needed when building with ENABLE_HTTPS. Plain-HTTP builds ignore this.
+#pragma once
+#error "Generate include/server_cert.h with tools/make-cert-*.sh before building with ENABLE_HTTPS."

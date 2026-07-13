@@ -1,0 +1,71 @@
+; ============================================================
+;  ir_tx.pio — IR transmit with a self-generated ~38 kHz carrier.
+;
+;  IR remotes send "marks" (carrier bursts) and "spaces" (silence). The receiver
+;  demodulates the carrier, so a mark MUST be modulated at the carrier frequency
+;  (commonly 38 kHz) — you cannot just hold the IR LED on.
+;
+;  Design (one state machine):
+;    The CPU pushes pairs of 32-bit words: [mark_cycles, space_cycles], where the
+;    unit is ONE carrier period. During a mark we toggle the pin each half-period
+;    to make the carrier; during a space we hold the pin low for that many
+;    carrier periods. The C side sets the clock divider so one PIO "tick" is a
+;    quarter carrier period, giving us room to build the 50% duty square wave and
+;    count whole carrier periods. (See ir.cpp for the exact divider + unit math.)
+;
+;    Word semantics from the FIFO:
+;      mark_cycles  = number of carrier periods to MODULATE (LED blinking at fc)
+;      space_cycles = number of carrier periods to stay OFF
+;    A pair of (0,0) is never pushed; the C driver simply stops feeding.
+;
+;  Carrier duty: ~50% (mark = half period high, half low). 38 kHz is the default
+;  but the divider can be retuned for 36/40 kHz protocols (set in ir.cpp).
+; ============================================================
+
+.program ir_tx
+.side_set 1 opt
+
+.wrap_target
+read_mark:
+    out x, 32        side 0          ; X = carrier periods to modulate; hold pin LOW while
+                                     ; stalled here waiting for the next word (idle = LOW)
+    jmp !x do_space                 ; if mark length is 0, skip straight to space
+mark_loop:
+    nop          side 1 [1]         ; pin HIGH for ~half a carrier period
+    nop          side 0 [1]         ; pin LOW  for ~half a carrier period
+    jmp x-- mark_loop               ; one carrier period done; repeat
+do_space:
+    out x, 32        side 0          ; X = carrier periods of silence (pin already LOW)
+    jmp !x read_mark                ; zero-length space -> straight to next pair
+space_loop:
+    nop          side 0 [3]         ; pin LOW for one carrier period (4 ticks)
+    jmp x-- space_loop
+.wrap
+
+% c-sdk {
+#include "hardware/clocks.h"
+
+// Initialise the IR SM on `pin`. `carrier_hz` is typically 38000.
+// We run the SM at 4 * carrier_hz so that:
+//   - a mark "period" = 2 nop+sideset instructions with [1] delay = 4 ticks,
+//   - a space "period" = 1 nop with [3] delay = 4 ticks,
+// i.e. each FIFO "cycle" count corresponds to exactly one carrier period.
+static inline void ir_tx_program_init(PIO pio, uint sm, uint offset, uint pin,
+                                      uint carrier_hz) {
+    pio_sm_config c = ir_tx_program_get_default_config(offset);
+
+    sm_config_set_sideset_pins(&c, pin);
+    sm_config_set_out_shift(&c, true, true, 32);   // shift right, autopull at 32
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_gpio_init(pio, pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 1, true);
+
+    // 4 PIO ticks per carrier period.
+    float div = (float)clock_get_hz(clk_sys) / ((float)carrier_hz * 4.0f);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

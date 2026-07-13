@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetHID · Learn</title>
+<style>
+  :root{--bg:#0d0d0f;--surface:#18181c;--surface2:#222228;--accent:#7c6af7;--accent2:#f76aad;
+        --text:#e8e8f0;--text-dim:#6b6b80;--border:#35354a;--ok:#5ad17c;--err:#f76a6a;
+        --radius:8px;--font:'Courier New',monospace;}
+  *{box-sizing:border-box;}
+  body{margin:0;padding:14px;background:var(--bg);color:var(--text);font-family:var(--font);}
+  h1{font-size:1rem;margin:0 0 2px;color:var(--accent);}
+  .sub{color:var(--text-dim);font-size:.8rem;margin:0 0 12px;}
+  .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+  button{font:inherit;padding:6px 12px;background:var(--surface2);color:var(--text);
+         border:1px solid var(--border);border-radius:6px;cursor:pointer;}
+  button:hover:not(:disabled){border-color:var(--accent);}
+  button:disabled{opacity:.5;cursor:default;}
+  button.primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+  button.ghost{background:transparent;}
+  input{padding:6px 8px;background:var(--surface);border:1px solid var(--border);
+        border-radius:6px;color:var(--text);font:inherit;}
+  .card{border:1px solid var(--border);border-radius:var(--radius);background:var(--surface);
+        padding:12px;margin-top:12px;}
+  .hint{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+        padding:8px 10px;font-size:.8rem;color:var(--text-dim);margin-bottom:12px;}
+  .status{min-height:1.2em;font-size:.85rem;margin-top:8px;}
+  .status.ok{color:var(--ok);} .status.err{color:var(--err);} .status.wait{color:var(--accent2);}
+  .meta{color:var(--text-dim);font-size:.85rem;}
+  code{background:var(--surface2);padding:1px 5px;border-radius:4px;}
+  table{border-collapse:collapse;width:100%;margin-top:6px;}
+  td,th{border:1px solid var(--border);padding:6px 8px;text-align:left;vertical-align:middle;}
+  th{background:var(--surface2);color:var(--text-dim);font-weight:normal;}
+  h2{font-size:.85rem;color:var(--text-dim);text-transform:uppercase;letter-spacing:.05em;margin:18px 0 0;}
+  .pulse{animation:p 1s ease-in-out infinite;}
+  @keyframes p{0%,100%{opacity:1}50%{opacity:.4}}
+</style>
+</head>
+<body>
+
+<h1>Learn a remote</h1>
+<p class="sub">Capture IR or 433 MHz codes from your own remotes, replay them, and save them in this browser.</p>
+
+<div class="hint">
+  Point the source remote at the receiver, click <b>Learn</b>, then press a button. IR uses the
+  TSOP receiver (GPIO18); RF uses the 433 MHz receiver (GPIO19). RF is noisier — it may take a couple
+  of presses. Captured codes replay through this NetHID's IR LED / 433 transmitter.
+</div>
+
+<div class="row">
+  <button class="primary" id="learnIr" onclick="learn('ir')">Learn IR</button>
+  <button class="primary" id="learnRf" onclick="learn('rf')">Learn RF</button>
+  <button class="ghost" id="cancelBtn" onclick="cancel()" disabled>Cancel</button>
+</div>
+<div class="status" id="status"></div>
+
+<div id="captureCard"></div>
+
+<h2>Saved</h2>
+<div id="saved"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let polling = null, pollKind = null, lastCapture = null;
+
+function setStatus(msg, cls){ const e=$('status'); e.textContent=msg||''; e.className='status'+(cls?' '+cls:''); }
+function busy(on){ $('learnIr').disabled=on; $('learnRf').disabled=on; $('cancelBtn').disabled=!on; }
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+
+async function jpost(url, body){
+  return fetch(url, {method:'POST', credentials:'same-origin',
+    headers: body?{'Content-Type':'application/json'}:undefined,
+    body: body?JSON.stringify(body):undefined});
+}
+
+async function learn(kind){
+  cancel();                                  // clear any prior poll
+  pollKind = kind;
+  busy(true);
+  setStatus('Arming '+kind.toUpperCase()+'…', 'wait');
+  try {
+    const r = await jpost('/api/'+kind+'/learn');
+    if (r.status === 401){ setStatus('Session expired — reload the page.', 'err'); busy(false); return; }
+    if (!r.ok){ setStatus('Could not arm ('+r.status+'). Is ENABLE_REMOTES on?', 'err'); busy(false); return; }
+  } catch(e){ setStatus('Network error arming capture.', 'err'); busy(false); return; }
+
+  setStatus('Point your '+kind.toUpperCase()+' remote at the receiver and press a button…', 'wait');
+  const deadline = Date.now() + 16000;
+  polling = true;
+  while (polling && Date.now() < deadline){
+    await sleep(350);
+    if (!polling) return;                    // cancelled
+    let j;
+    try { j = await (await fetch('/api/'+kind+'/captured', {credentials:'same-origin', cache:'no-store'})).json(); }
+    catch(e){ continue; }
+    if (j.ready){ polling=false; busy(false); showCapture(kind, j); return; }
+    if (j.armed === false){ break; }          // firmware gave up
+  }
+  if (polling){ polling=false; }
+  busy(false);
+  setStatus('No signal captured — try again (hold the button briefly).', 'err');
+}
+
+function cancel(){ if(polling){ polling=false; busy(false); setStatus('Cancelled.'); } }
+
+function captureLabel(c){
+  if (c.proto === 'nec') return 'IR · NEC · code '+c.code;
+  if (c.kind === 'rf')   return 'RF · raw · '+c.count+' edges';
+  return 'IR · raw · '+c.count+' edges';
+}
+
+function showCapture(kind, j){
+  lastCapture = { kind, proto:j.proto, code:j.code, carrier:j.carrier||38000, timings:j.timings||[], count:j.count };
+  setStatus('Captured ✓', 'ok');
+  $('captureCard').innerHTML = `
+    <div class="card">
+      <div><b>${captureLabel(lastCapture)}</b></div>
+      <div class="meta">${kind.toUpperCase()} · ${lastCapture.timings.length} timings${lastCapture.proto==='nec'?` · code <code>${lastCapture.code}</code>`:''}</div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" onclick="replay(window._cap)">Replay</button>
+        <input id="saveName" placeholder="name (e.g. TV power)" style="flex:1;min-width:120px">
+        <button onclick="saveCapture()">Save</button>
+      </div>
+    </div>`;
+  window._cap = lastCapture;
+}
+
+async function replay(item){
+  try {
+    let r;
+    if (item.kind === 'rf') r = await jpost('/api/rf', {timings:item.timings, repeat:8});
+    else                    r = await jpost('/api/ir', {proto:'raw', carrier:item.carrier||38000, timings:item.timings});
+    if (r.status===401) return setStatus('Session expired — reload.', 'err');
+    setStatus(r.ok ? 'Replayed ✓' : 'Replay error '+r.status, r.ok?'ok':'err');
+  } catch(e){ setStatus('Replay failed.', 'err'); }
+}
+
+// ── saved (localStorage) ────────────────────────────────────────────────────
+const KEY = 'nethid.learned';
+const load = () => { try { return JSON.parse(localStorage.getItem(KEY)||'[]'); } catch(e){ return []; } };
+const store = a => localStorage.setItem(KEY, JSON.stringify(a));
+
+function saveCapture(){
+  if (!lastCapture) return;
+  const name = ($('saveName').value || '').trim() || (lastCapture.kind.toUpperCase()+' '+Date.now().toString(36));
+  const a = load();
+  a.push({ id:'l'+Date.now().toString(36), name, kind:lastCapture.kind, proto:lastCapture.proto,
+           code:lastCapture.code, carrier:lastCapture.carrier, timings:lastCapture.timings });
+  store(a); renderSaved(); setStatus('Saved “'+name+'”.', 'ok');
+}
+
+function delSaved(id){ store(load().filter(x=>x.id!==id)); renderSaved(); }
+function replaySaved(id){ const it = load().find(x=>x.id===id); if (it) replay(it); }
+
+function renderSaved(){
+  const a = load();
+  if (!a.length){ $('saved').innerHTML = '<p class="meta">Nothing saved yet.</p>'; return; }
+  let h = '<table><tr><th>Name</th><th>Type</th><th>Detail</th><th>Actions</th></tr>';
+  for (const it of a){
+    const detail = it.proto==='nec' ? ('code '+it.code) : (it.timings.length+' edges');
+    h += `<tr><td>${it.name}</td><td>${it.kind.toUpperCase()}</td><td class="meta">${it.proto} · ${detail}</td>
+      <td class="row">
+        <button class="primary" onclick="replaySaved('${it.id}')">Replay</button>
+        <button onclick="delSaved('${it.id}')">✕</button>
+      </td></tr>`;
+  }
+  h += '</table>';
+  $('saved').innerHTML = h;
+}
+
+renderSaved();
+</script>
+
+</body>
+</html>

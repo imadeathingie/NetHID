@@ -1,0 +1,396 @@
+{
+  "version": 1,
+  "tabs": [
+    {
+      "id": "builtin_media",
+      "name": "Media",
+      "panels": [
+        {
+          "title": "SEARCH",
+          "search": true,
+          "searchPlaceholder": "Search YouTube…",
+          "buttons": [
+            {
+              "label": "GO",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 56
+                },
+                {
+                  "t": "delay",
+                  "ms": 750
+                },
+                {
+                  "t": "key",
+                  "mod": 1,
+                  "key": 4
+                },
+                {
+                  "t": "delay",
+                  "ms": 500
+                },
+                {
+                  "t": "search"
+                },
+                {
+                  "t": "delay",
+                  "ms": 500
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 40
+                }
+              ],
+              "faIcon": "fa-solid fa-magnifying-glass"
+            }
+          ]
+        },
+        {
+          "title": "NAVIGATE RESULTS",
+          "buttons": [
+            {
+              "label": "Skip to content",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 40
+                }
+              ],
+              "faIcon": "fa-solid fa-forward-step"
+            },
+            {
+              "label": "First result (8)",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                }
+              ],
+              "faIcon": "fa-solid fa-angles-right"
+            },
+            {
+              "label": "Nudge back",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 43
+                }
+              ],
+              "faIcon": "fa-solid fa-angle-left"
+            },
+            {
+              "label": "Prev (4)",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 43
+                }
+              ],
+              "faIcon": "fa-solid fa-backward-step"
+            },
+            {
+              "label": "Next (4)",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                },
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                }
+              ],
+              "faIcon": "fa-solid fa-forward-step"
+            },
+            {
+              "label": "Nudge fwd",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 43
+                }
+              ],
+              "faIcon": "fa-solid fa-angle-right"
+            },
+            {
+              "label": "Open",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 40
+                }
+              ],
+              "faIcon": "fa-solid fa-play"
+            }
+          ]
+        },
+        {
+          "title": "PLAYBACK",
+          "buttons": [
+            {
+              "label": "Play/Pause",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 19
+                }
+              ],
+              "faIcon": "fa-solid fa-play"
+            },
+            {
+              "label": "Back 10s",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 13
+                }
+              ],
+              "faIcon": "fa-solid fa-backward"
+            },
+            {
+              "label": "Pause (k)",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 14
+                }
+              ],
+              "faIcon": "fa-solid fa-pause"
+            },
+            {
+              "label": "Fwd 10s",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 15
+                }
+              ],
+              "faIcon": "fa-solid fa-forward"
+            },
+            {
+              "label": "Next video",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 17
+                }
+              ],
+              "faIcon": "fa-solid fa-forward-step"
+            }
+          ]
+        },
+        {
+          "title": "VOLUME",
+          "buttons": [
+            {
+              "label": "Vol down",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 81
+                }
+              ],
+              "faIcon": "fa-solid fa-volume-low"
+            },
+            {
+              "label": "Mute",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 16
+                }
+              ],
+              "faIcon": "fa-solid fa-volume-xmark"
+            },
+            {
+              "label": "Vol up",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 82
+                }
+              ],
+              "faIcon": "fa-solid fa-volume-high"
+            }
+          ]
+        },
+        {
+          "title": "FRAME / SPEED",
+          "buttons": [
+            {
+              "label": "Slower",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 54
+                }
+              ],
+              "faIcon": "fa-solid fa-backward-step"
+            },
+            {
+              "label": "Prev frame",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 54
+                }
+              ],
+              "faIcon": "fa-solid fa-step-backward"
+            },
+            {
+              "label": "Next frame",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 55
+                }
+              ],
+              "faIcon": "fa-solid fa-step-forward"
+            },
+            {
+              "label": "Faster",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 2,
+                  "key": 55
+                }
+              ],
+              "faIcon": "fa-solid fa-forward-step"
+            }
+          ]
+        },
+        {
+          "title": "DISPLAY",
+          "buttons": [
+            {
+              "label": "Fullscreen",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 9
+                }
+              ],
+              "faIcon": "fa-solid fa-expand"
+            },
+            {
+              "label": "Theater",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 23
+                }
+              ],
+              "faIcon": "fa-solid fa-tv"
+            },
+            {
+              "label": "Miniplayer",
+              "steps": [
+                {
+                  "t": "key",
+                  "mod": 0,
+                  "key": 12
+                }
+              ],
+              "faIcon": "fa-solid fa-window-restore"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

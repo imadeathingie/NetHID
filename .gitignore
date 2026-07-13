@@ -1,0 +1,25 @@
+# Build output
+/build/
+*.uf2
+*.elf
+*.bin
+*.hex
+*.map
+*.dis
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+*~
+.vscode/
+.idea/
+
+# Local secrets: include/env.h holds your real WiFi/web credentials and is
+# NOT tracked. The repo ships include/env.h.example as a template — copy it:
+#     cp include/env.h.example include/env.h
+# then fill in your real values. env.h.example IS tracked (it's the sample).
+include/env.h
+
+# TLS server cert/key (generated; contains the private key)
+include/server_cert.h
+certs/

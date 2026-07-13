@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetHID · IR finder</title>
+<style>
+  :root {
+    --bg:#0d0d0f; --surface:#18181c; --surface2:#222228; --accent:#7c6af7;
+    --accent2:#f76aad; --text:#e8e8f0; --text-dim:#6b6b80; --border:#35354a;
+    --ok:#5ad17c; --err:#f76a6a; --radius:8px; --font:'Courier New', monospace;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:14px; background:var(--bg); color:var(--text); font-family:var(--font); }
+  h1 { font-size:1rem; margin:0 0 2px; color:var(--accent); }
+  .sub { color:var(--text-dim); font-size:.8rem; margin:0 0 10px; }
+  a { color:var(--accent2); }
+  .toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; }
+  input { padding:6px 8px; background:var(--surface); border:1px solid var(--border);
+          border-radius:6px; color:var(--text); font:inherit; }
+  #searchBox { width:min(420px,100%); }
+  #buttonFilter { width:min(320px,100%); }
+  button { font:inherit; padding:4px 10px; background:var(--surface2); color:var(--text);
+           border:1px solid var(--border); border-radius:6px; cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:8px; }
+  .panel { border:1px solid var(--border); border-radius:var(--radius); padding:8px;
+           height:240px; overflow:auto; background:var(--surface); }
+  .panel h3 { margin:0 0 6px; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; color:var(--text-dim); }
+  .item { cursor:pointer; padding:4px 6px; border-radius:5px; }
+  .item:hover { background:var(--surface2); }
+  .result { padding:6px; border-bottom:1px solid var(--border); }
+  .result:hover { background:var(--surface2); }
+  .small { font-size:.8em; color:var(--text-dim); }
+  table { border-collapse:collapse; width:100%; margin-top:6px; }
+  td, th { border:1px solid var(--border); padding:5px 7px; text-align:left; vertical-align:top; }
+  th { background:var(--surface2); color:var(--text-dim); font-weight:normal; }
+  pre { margin:0; white-space:pre-wrap; font-size:.8em; color:var(--text-dim); }
+  .stat { font-size:.8em; margin-left:6px; }
+  .stat.ok { color:var(--ok); } .stat.err { color:var(--err); }
+  hr { border:0; border-top:1px solid var(--border); margin:12px 0; }
+  .hint { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+          padding:8px 10px; font-size:.8rem; color:var(--text-dim); margin-bottom:10px; }
+  code { background:var(--surface2); padding:1px 4px; border-radius:4px; }
+</style>
+</head>
+<body>
+
+<h1>IR code finder</h1>
+<p class="sub">Browse the open <a href="https://github.com/probonopd/irdb" target="_blank" rel="noopener">IRDB</a>
+remote database and fire NEC codes straight from this NetHID.</p>
+
+<div class="hint">
+  <b>NEC</b> family sends as the compact NEC form; <b>RC5</b>, <b>RC6</b>, <b>Sony</b>, <b>Samsung</b>,
+  <b>Panasonic</b> and <b>JVC</b> are rendered to raw timings. <b>Send</b> transmits immediately through
+  the IR LED. Protocols without an encoder yet are greyed out. Database is fetched from
+  the jsDelivr CDN; favourites are stored in this browser.
+</div>
+
+<div class="toolbar">
+  <input id="searchBox" placeholder="Search remotes…" oninput="performSearch()">
+  <span id="searchStats" class="small"></span>
+</div>
+<div id="searchResults" class="panel" style="height:auto; max-height:200px;"></div>
+
+<hr>
+
+<div class="toolbar">
+  <button class="primary" onclick="loadIndex()">Load IRDB index</button>
+  <span id="loadStat" class="stat"></span>
+</div>
+
+<div class="grid">
+  <div class="panel"><h3>Favorites</h3><div id="favorites"></div></div>
+  <div class="panel"><h3>Manufacturers</h3><div id="manufacturers"></div></div>
+  <div class="panel"><h3>Categories</h3><div id="categories"></div></div>
+  <div class="panel"><h3>Remotes</h3><div id="remotes"></div></div>
+  <div class="panel"><h3>Selected</h3><div id="selected"></div></div>
+</div>
+
+<hr>
+
+<div class="toolbar">
+  <label>Filter buttons:
+    <input id="buttonFilter" placeholder="power, vol, mute…" oninput="filterButtons()">
+  </label>
+  <span id="buttonFilterStats" class="small"></span>
+</div>
+
+<div id="buttons"></div>
+
+<script>
+/* ── protocols: IRDB (protocol,device,subdevice,function) → /api/ir ──────────
+   NEC family uses the compact {proto:'nec',code}. Other well-specified
+   protocols are rendered to raw mark/space timings (µs) from their IRP spec and
+   sent as {proto:'raw',carrier,timings}. Unsupported protocols are listed but
+   can't be sent. Renderers are spec-derived — verify against your hardware. */
+function encodeNEC(device, func){
+  return ((device&0xff)|((~device&0xff)<<8)|((func&0xff)<<16)|((~func&0xff)<<24))>>>0;
+}
+function encodeNECx2(device, subdevice, func){
+  return ((device&0xff)|((subdevice&0xff)<<8)|((func&0xff)<<16)|((~func&0xff)<<24))>>>0;
+}
+const _bL=(v,n)=>{const a=[];for(let i=0;i<n;i++)a.push((v>>>i)&1);return a;};
+const _bM=(v,n)=>{const a=[];for(let i=n-1;i>=0;i--)a.push((v>>>i)&1);return a;};
+function _pulseDist(carrier,header,zero,one,leadOut,bits){
+  const t=[]; if(header)t.push(header[0],header[1]);
+  for(const b of bits){const c=b?one:zero;t.push(c[0],c[1]);}
+  if(leadOut)t.push(leadOut); return {carrier,timings:t};
+}
+function _biphase(cells){
+  const r=[];let cl=cells[0][0],ac=0;
+  for(const [lv,du] of cells){if(lv===cl)ac+=du;else{r.push([cl,ac]);cl=lv;ac=du;}} r.push([cl,ac]);
+  if(r.length&&r[0][0]===0)r.shift(); if(r.length&&r[r.length-1][0]===0)r.pop();
+  return r.map(x=>x[1]);
+}
+function _rc5(D,F){            // {36k,msb,889} 0->mark,space 1->space,mark
+  const u=889,bits=[1,(~(F>>6))&1,0,..._bM(D,5),..._bM(F&0x3f,6)],c=[];
+  for(const b of bits){const p=b?[0,1]:[1,0];c.push([p[0],u],[p[1],u]);}
+  return {carrier:36000,timings:_biphase(c)};
+}
+function _rc6(D,F){            // {36k,444,msb} mode 0, double-width toggle
+  const u=444,c=[],m=b=>b?[1,0]:[0,1];
+  for(const b of [1,0,0,0]){const p=m(b);c.push([p[0],u],[p[1],u]);}   // start + mode 000
+  {const p=m(0);c.push([p[0],2*u],[p[1],2*u]);}                        // toggle T=0
+  for(const b of [..._bM(D,8),..._bM(F,8)]){const p=m(b);c.push([p[0],u],[p[1],u]);}
+  const out=[2664,888]; for(const du of _biphase(c)) out.push(du);     // leader 6,-2
+  return {carrier:36000,timings:out};
+}
+function _sony(D,S,F,v){       // {40k,600} header 2400,600 ; 0->600 1->1200 ; LSB
+  const t=[2400,600]; let bits;
+  if(v===15)bits=[..._bL(F,7),..._bL(D,8)];
+  else if(v===20)bits=[..._bL(F,7),..._bL(D,5),..._bL(S>=0?S:0,8)];
+  else bits=[..._bL(F,7),..._bL(D,5)];
+  for(const b of bits)t.push(b?1200:600,600); t.pop();
+  return {carrier:40000,timings:t};
+}
+function _jvc(D,F){            // {38k,525} header 8400,4200 ; D:8,F:8 LSB
+  return _pulseDist(38000,[8400,4200],[525,525],[525,1575],525,[..._bL(D,8),..._bL(F,8)]);
+}
+function _samsung32(D,F){      // {38k} header 4500,4500 ; data D,D,F,~F LSB (address repeated)
+  return _pulseDist(38000,[4500,4500],[560,560],[560,1690],560,
+    [..._bL(D,8),..._bL(D,8),..._bL(F,8),..._bL((~F)&0xff,8)]);
+}
+function _samsung36(D,S,F){    // {37.9k,560} D:8,S:8, 1,-9 separator, E:4=0,F:8,~F:8
+  const u=560,t=[9*u,9*u],z=[u,u],o=[u,3*u];
+  const push=bb=>{for(const b of bb){const c=b?o:z;t.push(c[0],c[1]);}};
+  push([..._bL(D,8),..._bL(S>=0?S:0,8)]); t.push(u,9*u);
+  push([..._bL(0,4),..._bL(F,8),..._bL((~F)&0xff,8)]); t.push(u);
+  return {carrier:37900,timings:t};
+}
+function _panasonic(D,S,F){   // {37k,432} Kaseikyo vendor 0x02,0x20 (on-air "4004"); chk=D^S^F
+  const d=D&0xff,s=(S>=0?S:0)&0xff,f=F&0xff,chk=(d^s^f)&0xff;
+  return _pulseDist(37000,[3456,1728],[432,432],[432,1296],432,
+    [..._bL(0x02,8),..._bL(0x20,8),..._bL(d,8),..._bL(s,8),..._bL(f,8),..._bL(chk,8)]);
+}
+function renderRaw(proto,D,S,F){
+  const p=String(proto).toUpperCase();
+  if(p.startsWith('RC6'))return _rc6(D,F);
+  if(p.startsWith('RC5'))return _rc5(D,F);
+  if(p.startsWith('SONY')){const m=p.match(/(\d+)/);return _sony(D,S,F,m?+m[1]:12);}
+  if(p.startsWith('SAMSUNG')){const m=p.match(/(\d+)/);return (m&&+m[1]===36)?_samsung36(D,S,F):_samsung32(D,F);}
+  if(p.startsWith('PANASONIC')||p.startsWith('KASEIKYO'))return _panasonic(D,S,F);
+  if(p==='JVC')return _jvc(D,F);
+  return null;
+}
+function buildPayload(proto,D,S,F){
+  const p=String(proto).toUpperCase();
+  if(p==='NEC'||p==='NEC1'||p==='NEC2') return {proto:'nec',code:encodeNECx2(D,(S>=0?S:(~D)&0xff),F)};
+  if(p.startsWith('NECX'))             return {proto:'nec',code:encodeNECx2(D,(S>=0?S:0),F)};
+  const raw=renderRaw(p,D,S,F);
+  return raw? {proto:'raw',carrier:raw.carrier,timings:raw.timings} : null;
+}
+
+/* ── IRDB browser ────────────────────────────────────────────────────────── */
+const IRDB_BASE = 'https://cdn.jsdelivr.net/gh/probonopd/irdb@master/codes/';
+
+let hierarchy = {};
+let searchIndex = [];
+let currentRemoteButtons = [];
+let currentRemotePath = '';
+
+let selectedRemotes = JSON.parse(localStorage.getItem('selectedRemotes') || '[]');
+let favorites = JSON.parse(localStorage.getItem('favorites') || '[]');
+
+let currentManufacturer = null;
+let currentCategory = null;
+
+function saveState(){
+  localStorage.setItem('selectedRemotes', JSON.stringify(selectedRemotes));
+  localStorage.setItem('favorites', JSON.stringify(favorites));
+}
+function payloadFor(b){
+  return b.proto === 'raw'
+    ? { proto:'raw', carrier:b.carrier, timings:b.timings }
+    : { proto:'nec', code:b.code };
+}
+
+function setStat(id, msg, cls){
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'stat' + (cls ? ' ' + cls : '');
+}
+
+/* Send a button's code to this device's IR blaster (same-origin, cookie auth). */
+async function sendIR(buttonIndex){
+  const b = currentRemoteButtons[buttonIndex];
+  if (!b) return;
+  setStat('stat_' + buttonIndex, '…');
+  try {
+    const r = await fetch('/api/ir', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payloadFor(b))
+    });
+    if (r.status === 401) { setStat('stat_' + buttonIndex, 'session expired — reload', 'err'); return; }
+    if (r.ok)             { setStat('stat_' + buttonIndex, 'sent ✓', 'ok'); }
+    else                  { setStat('stat_' + buttonIndex, 'error ' + r.status, 'err'); }
+  } catch (e) {
+    setStat('stat_' + buttonIndex, 'failed', 'err');
+  }
+  setTimeout(() => setStat('stat_' + buttonIndex, ''), 2000);
+}
+
+async function copyPayload(buttonIndex){
+  const b = currentRemoteButtons[buttonIndex];
+  if (!b) return;
+  try { await navigator.clipboard.writeText(JSON.stringify(payloadFor(b), null, 2)); setStat('stat_' + buttonIndex, 'copied', 'ok'); }
+  catch (e) { setStat('stat_' + buttonIndex, 'copy failed', 'err'); }
+  setTimeout(() => setStat('stat_' + buttonIndex, ''), 1500);
+}
+
+function renderFavorites(){
+  const host = document.getElementById('favorites');
+  if (!host) return;
+  host.innerHTML = favorites.map((f, i) => `
+    <div>
+      <div class="small">${f.manufacturer}/${f.category}</div>
+      <div><b>${f.remote}</b>
+        <button onclick="openFavorite(${i})">Open</button>
+        <button onclick="removeFavorite(${i})">✕</button>
+      </div>
+    </div>`).join('');
+}
+
+function addFavorite(manufacturer, category, remote){
+  const path = manufacturer + '/' + category + '/' + remote;
+  if (favorites.find(x => x.path === path)) return;
+  favorites.push({ path, manufacturer, category, remote });
+  saveState(); renderFavorites();
+}
+function removeFavorite(i){ favorites.splice(i, 1); saveState(); renderFavorites(); }
+function openFavorite(i){ const f = favorites[i]; selectManufacturer(f.manufacturer); selectCategory(f.category); loadRemote(f.remote); }
+
+function renderSelected(){
+  const host = document.getElementById('selected');
+  if (!host) return;
+  host.innerHTML = selectedRemotes.map((r, i) => `
+    <div>${r.path} <button onclick="removeRemote(${i})">✕</button></div>`).join('');
+}
+function removeRemote(i){ selectedRemotes.splice(i, 1); saveState(); renderSelected(); }
+
+async function loadIndex(){
+  setStat('loadStat', 'loading…');
+  try {
+    const txt = await (await fetch(IRDB_BASE + 'index')).text();
+    const lines = txt.split('\n').map(x => x.trim()).filter(Boolean).filter(x => x.endsWith('.csv'));
+    hierarchy = {}; searchIndex = [];
+    for (const path of lines){
+      const p = path.split('/'); if (p.length < 3) continue;
+      const manufacturer = p[0], category = p[1], remote = p.slice(2).join('/');
+      hierarchy[manufacturer] = hierarchy[manufacturer] || {};
+      hierarchy[manufacturer][category] = hierarchy[manufacturer][category] || [];
+      hierarchy[manufacturer][category].push(remote);
+      searchIndex.push({ manufacturer, category, remote, path });
+    }
+    renderManufacturers();
+    document.getElementById('searchStats').textContent = `${searchIndex.length} remotes indexed`;
+    setStat('loadStat', '');
+  } catch (e) { setStat('loadStat', 'load failed (CDN unreachable?)', 'err'); }
+}
+
+function performSearch(){
+  const q = document.getElementById('searchBox').value.trim().toLowerCase();
+  if (!q){ document.getElementById('searchResults').innerHTML = ''; return; }
+  const results = searchIndex.filter(r =>
+    (r.manufacturer + ' ' + r.category + ' ' + r.remote).toLowerCase().includes(q)).slice(0, 200);
+  document.getElementById('searchStats').textContent = `${results.length} matches`;
+  document.getElementById('searchResults').innerHTML = results.map(r => `
+    <div class="result"><b>${r.manufacturer}</b> / ${r.category} / ${r.remote}
+      <button onclick="jumpToRemote('${r.manufacturer}','${r.category}','${r.remote}')">Open</button>
+      <button onclick="addFavorite('${r.manufacturer}','${r.category}','${r.remote}')">★</button>
+    </div>`).join('');
+}
+
+function renderManufacturers(){
+  document.getElementById('manufacturers').innerHTML = Object.keys(hierarchy).sort()
+    .map(m => `<div class="item" onclick="selectManufacturer('${m}')">${m}</div>`).join('');
+}
+function selectManufacturer(name){
+  currentManufacturer = name;
+  document.getElementById('categories').innerHTML = Object.keys(hierarchy[name]).sort()
+    .map(c => `<div class="item" onclick="selectCategory('${c}')">${c}</div>`).join('');
+}
+function selectCategory(name){
+  currentCategory = name;
+  document.getElementById('remotes').innerHTML = hierarchy[currentManufacturer][name].map(r => `
+    <div class="item">${r}
+      <button onclick="loadRemote('${r}')">Open</button>
+      <button onclick="addRemote('${r}')">Add</button>
+      <button onclick="addFavorite('${currentManufacturer}','${currentCategory}','${r}')">★</button>
+    </div>`).join('');
+}
+function jumpToRemote(manufacturer, category, remote){ selectManufacturer(manufacturer); selectCategory(category); loadRemote(remote); }
+
+async function buildRemote(path){
+  const csv = await (await fetch(IRDB_BASE + path)).text();
+  const rows = csv.split('\n').slice(1).map(x => x.trim()).filter(Boolean);
+  const buttons = [];
+  for (const row of rows){
+    const c = row.split(','); if (c.length < 5) continue;
+    const pay = buildPayload(c[1], Number(c[2]), Number(c[3]), Number(c[4]));
+    if (pay) buttons.push({ name: c[0], proto_name: c[1], ...pay });
+    else     buttons.push({ name: c[0], proto_name: c[1], unsupported: true });
+  }
+  return { path, buttons };
+}
+async function addRemote(remote){
+  const path = currentManufacturer + '/' + currentCategory + '/' + remote;
+  if (selectedRemotes.find(x => x.path === path)) return;
+  selectedRemotes.push(await buildRemote(path));
+  saveState(); renderSelected();
+}
+
+function renderButtonTable(buttons){
+  const sendable = buttons.filter(b => !b.unsupported).length;
+  document.getElementById('buttonFilterStats').textContent =
+    `${buttons.length} buttons · ${sendable} sendable`;
+  let html = `<h2 style="font-size:.9rem">${currentRemotePath || ''}</h2>`;
+  if (!buttons.length){
+    html += '<p class="small">No commands in this remote.</p>';
+    document.getElementById('buttons').innerHTML = html; return;
+  }
+  html += '<table><tr><th>Button</th><th>Type</th><th>Payload</th><th>Actions</th></tr>';
+  for (const b of buttons){
+    const i = b._i;
+    let type, body, actions;
+    if (b.unsupported){
+      type = `${b.proto_name} <span class="small">(unsupported)</span>`;
+      body = '<span class="small">no encoder yet</span>';
+      actions = '<button disabled title="No raw encoder for this protocol">Send</button>';
+    } else {
+      const send = `<button class="primary" onclick="sendIR(${i})">Send</button>
+                    <button onclick="copyPayload(${i})">Copy JSON</button>
+                    <span id="stat_${i}" class="stat"></span>`;
+      if (b.proto === 'raw'){
+        type = `${b.proto_name} <span class="small">→ raw ${b.carrier/1000}kHz</span>`;
+        body = `<pre>${b.timings.length} edges</pre>`;
+      } else {
+        type = 'nec';
+        body = `<pre>${b.code}</pre>`;
+      }
+      actions = send;
+    }
+    html += `<tr><td>${b.name}</td><td>${type}</td><td>${body}</td><td>${actions}</td></tr>`;
+  }
+  html += '</table>';
+  document.getElementById('buttons').innerHTML = html;
+}
+function filterButtons(){
+  const q = document.getElementById('buttonFilter').value.trim().toLowerCase();
+  if (!q){ renderButtonTable(currentRemoteButtons); return; }
+  renderButtonTable(currentRemoteButtons.filter(b => b.name.toLowerCase().includes(q)));
+}
+async function loadRemote(remote){
+  const path = currentManufacturer + '/' + currentCategory + '/' + remote;
+  const built = await buildRemote(path);
+  currentRemoteButtons = built.buttons;
+  currentRemoteButtons.forEach((b, i) => b._i = i);
+  currentRemotePath = path;
+  document.getElementById('buttonFilter').value = '';
+  renderButtonTable(currentRemoteButtons);
+}
+
+Object.assign(window, {
+  loadIndex, performSearch, selectManufacturer, selectCategory, loadRemote, addRemote,
+  jumpToRemote, addFavorite, removeFavorite, openFavorite, removeRemote, filterButtons,
+  copyPayload, sendIR
+});
+
+renderFavorites();
+renderSelected();
+</script>
+
+</body>
+</html>
