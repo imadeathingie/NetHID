@@ -30,6 +30,7 @@ void dbg(const char *line);  // boot/diagnostic line (printf + HID-typed)
 #define HID_REPORT_ID_KEYBOARD  1
 #define HID_REPORT_ID_MOUSE     2
 #define HID_REPORT_ID_ABSMOUSE  3
+#define HID_REPORT_ID_CONSUMER  4
 
 // ── Report structs ───────────────────────────────────────────────────────────
 // TinyUSB (hid.h) already defines hid_keyboard_report_t and hid_mouse_report_t
@@ -38,12 +39,48 @@ void dbg(const char *line);  // boot/diagnostic line (printf + HID-typed)
 
 // Absolute pointer report (Report ID 3). X/Y are 0..32767 spanning the full
 // screen width/height regardless of resolution. Wheel is a relative delta.
+#ifndef ABS_MOUSE_MODE
+#define ABS_MOUSE_MODE 2
+#endif
+
+// Which TinyUSB HID instance carries the absolute pointer. Mode 2 gives it an
+// interface of its own; the other modes share the first one.
+#if ENABLE_ABS_MOUSE && ABS_MOUSE_MODE == 2
+#define HID_ABS_INSTANCE 1
+#else
+#define HID_ABS_INSTANCE 0
+#endif
+
+#if ABS_MOUSE_MODE == 1
+// Digitizer (Pen) report. `flags` is bit 0 tip switch, bit 1 in range.
+//
+// IN RANGE MUST BE SET on any report carrying a position: a host will not track
+// a pointer it does not believe is near the surface, and a report with it clear
+// is discarded rather than treated as a move.
+//
+// No buttons or wheel here on purpose. Digitizer button semantics vary by host —
+// barrel switch is right-click on some and nothing on others — while the
+// relative mouse on report 2 does buttons correctly everywhere. Position comes
+// from this report and clicks from that one, with a zero movement delta.
+#define HID_ABS_TIP      0x01
+#define HID_ABS_IN_RANGE 0x02
+
 typedef struct __attribute__((packed)) {
-    uint8_t  buttons;
+    uint8_t  flags;
     uint16_t x;       // 0..32767, left→right
     uint16_t y;       // 0..32767, top→bottom
+} hid_abs_report_t;
+#else
+// An ordinary mouse report whose X/Y are absolute. Used by BOTH the separate
+// interface (mode 2) and the legacy in-mouse form (mode 0): same bytes, and the
+// descriptor builds them from one shared ABS_POINTER_BODY for the same reason.
+typedef struct __attribute__((packed)) {
+    uint8_t  buttons;
+    uint16_t x;
+    uint16_t y;
     int8_t   wheel;
 } hid_abs_report_t;
+#endif
 
 // Full-scale logical maximum for absolute coordinates.
 #define HID_ABS_MAX  32767
@@ -59,6 +96,7 @@ typedef enum {
     HID_CMD_ABS_REPORT,     // absolute pointer position
     HID_CMD_TYPE_STRING,
     HID_CMD_WAKEUP,         // assert USB Remote Wakeup signal
+    HID_CMD_CONSUMER,       // consumer control usage (media keys)
 } hid_cmd_type_t;
 
 typedef struct {
@@ -66,6 +104,7 @@ typedef struct {
     union {
         hid_keyboard_report_t key;
         hid_mouse_report_t    mouse;
+        uint16_t              consumer;
         hid_abs_report_t      abs;
         struct {
             char    text[256];
@@ -80,9 +119,30 @@ typedef struct {
 bool hid_push_key_report(const hid_keyboard_report_t *report, bool auto_release);
 bool hid_push_key_release(void);
 bool hid_push_mouse_report(const hid_mouse_report_t *report);
+
+// Consumer Control: one 16-bit usage, or 0 to release. Volume, transport,
+// brightness and the browser keys live here rather than on the keyboard report
+// because they are not keyboard usages.
+bool hid_push_consumer(uint16_t usage);
 bool hid_push_abs_report(const hid_abs_report_t *report);
 
+// Move the pointer to an absolute screen position, optionally clicking and
+// scrolling there. x/y are 0..HID_ABS_MAX and are clamped for you.
+//
+// Use THIS, not hid_push_abs_report(), from protocol handlers. Under
+// ABS_MOUSE_MODE 1 (digitizer) a click is not one report but four — position with tip
+// down, buttons on the relative mouse, tip up, buttons released — and web.cpp
+// and server.cpp each grew their own copy of that dance. Only one of them was
+// updated when the absolute pointer became a digitizer, so the TCP path stopped
+// compiling and would have been silently wrong if it had not. One copy now.
+void hid_push_abs_pointer(uint16_t x, uint16_t y, uint8_t buttons, int8_t wheel);
+
 bool hid_push_type_string(const char *text, uint8_t len, uint8_t delay_ms);
+
+// True while the string typer is driving the endpoint. Anything composing its
+// own reports must stand aside until this clears, or the two fight over the
+// same endpoint. Used by the physical-keyboard macro interpreter.
+bool hid_typer_busy(void);
 bool hid_push_wakeup(void);
 
 // State queries
@@ -104,14 +164,9 @@ typedef struct {
 bool ascii_to_hid(char c, ascii_hid_t *out);
 
 // ── Modifier bitmasks ────────────────────────────────────────────────────────
-#define MOD_LCTRL   0x01
-#define MOD_LSHIFT  0x02
-#define MOD_LALT    0x04
-#define MOD_LGUI    0x08
-#define MOD_RCTRL   0x10
-#define MOD_RSHIFT  0x20
-#define MOD_RALT    0x40
-#define MOD_RGUI    0x80
+// In their own header so a module firmware, which has no TinyUSB, can name them
+// without including this file. Re-exported here so nothing else had to change.
+#include "hid_mods.h"
 
 // ── HID key codes ────────────────────────────────────────────────────────────
 #define KEY_NONE        0x00
@@ -194,6 +249,69 @@ bool ascii_to_hid(char c, ascii_hid_t *out);
 #define KEY_DOWN        0x51
 #define KEY_UP          0x52
 #define KEY_NUMLOCK     0x53
+
+// ── Keypad ───────────────────────────────────────────────────────────────────
+// The number pad is its own block of usages, NOT the digit row with a modifier:
+// a host distinguishes them, and software that cares (spreadsheets, CAD, remote
+// desktop, games binding "numpad 5") sees a different key entirely.
+#define KEY_KP_SLASH    0x54
+#define KEY_KP_ASTERISK 0x55
+#define KEY_KP_MINUS    0x56
+#define KEY_KP_PLUS     0x57
+#define KEY_KP_ENTER    0x58
+#define KEY_KP_1        0x59
+#define KEY_KP_2        0x5A
+#define KEY_KP_3        0x5B
+#define KEY_KP_4        0x5C
+#define KEY_KP_5        0x5D
+#define KEY_KP_6        0x5E
+#define KEY_KP_7        0x5F
+#define KEY_KP_8        0x60
+#define KEY_KP_9        0x61
+#define KEY_KP_0        0x62
+#define KEY_KP_DOT      0x63
+#define KEY_KP_EQUAL    0x67
+#define KEY_KP_COMMA    0x85    // Brazilian and some JIS pads
+
+// ── Keys the ANSI layout does not have ───────────────────────────────────────
+#define KEY_NONUS_HASH  0x32    // ISO # / ~  (the extra key by Enter)
+#define KEY_NONUS_BSLS  0x64    // ISO \ / |  (the extra key by left Shift)
+#define KEY_KB_POWER    0x66
+
+// ── Editing and system keys ──────────────────────────────────────────────────
+// Sun/Unix heritage, still present on some full-size boards and understood by
+// X11, macOS and a fair amount of Windows software.
+#define KEY_EXECUTE     0x74
+#define KEY_HELP        0x75
+#define KEY_MENU        0x76
+#define KEY_SELECT      0x77
+#define KEY_STOP        0x78
+#define KEY_AGAIN       0x79
+#define KEY_UNDO        0x7A
+#define KEY_CUT         0x7B
+#define KEY_COPY        0x7C
+#define KEY_PASTE       0x7D
+#define KEY_FIND        0x7E
+
+// Volume on the KEYBOARD page, which is not the same thing as the Consumer
+// Control page the media keys use (see src/kb/features/consumer.cpp). These are
+// rarely acted on by a modern host; KC_MUTE/KC_VOLU on the consumer page are
+// what you almost certainly want. Here for completeness of the usage table.
+#define KEY_KB_MUTE     0x7F
+#define KEY_KB_VOLUP    0x80
+#define KEY_KB_VOLDOWN  0x81
+
+// ── International and language ───────────────────────────────────────────────
+// JIS and Hangul boards carry these as physical keys; without them a Japanese
+// or Korean full-size layout cannot be mapped at all.
+#define KEY_INT1        0x87    // RO      ろ  (JIS \ _)
+#define KEY_INT2        0x88    // KANA    かな
+#define KEY_INT3        0x89    // JYEN    ¥
+#define KEY_INT4        0x8A    // HENK    変換
+#define KEY_INT5        0x8B    // MHEN    無変換
+#define KEY_LANG1       0x90    // HAEN    한/영
+#define KEY_LANG2       0x91    // HANJA   한자
+
 #define KEY_F13         0x68
 #define KEY_F14         0x69
 #define KEY_F15         0x6A

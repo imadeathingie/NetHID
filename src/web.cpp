@@ -17,6 +17,7 @@
 #include "web.h"
 #include "nethid.h"
 #include "auth.h"
+#include "auth_store.h"
 #include "secrets.h"
 #include "tabs.h"
 #include "config.h"
@@ -24,11 +25,45 @@
 #include "remotes.h"
 #endif
 #include "net_compat.h"
+#if ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP
+#include "kb/kb.h"
+#include "kb/keymap_store.h"
+#include "kb/layout.h"
+#include "kb/autoclick.h"   /* NUM_AUTOCLICKS, for /api/keymap/info */
+#if SPLIT_ENABLE
+#include "split/split.h"
+#endif
+#endif
+#if ENABLE_KEYBOARD && KB_FEATURE_MACRO_STORE
+#include "kb/macro_store.h"
+#endif
+#if ENABLE_KEYBOARD && KB_FEATURE_AUTOCLICK
+#include "kb/autoclick.h"   /* includes the board's keyboard.h for NUM_AUTOCLICKS */
+#endif
+#if ENABLE_AP_MODE
+#include "wifi_store.h"
+#include "ap_mode.h"
+#endif
+#if ENABLE_SETTINGS
+#include "settings.h"
+#endif
 #include "pico/stdlib.h"
 
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+// snprintf returns the length it WOULD have written, so an `o += snprintf()`
+// chain can run past the end of the buffer; `sizeof(jb) - o` then wraps to a
+// huge size_t and the next call writes off the end. Clamp after every step, so
+// the response is truncated rather than the stack being scribbled on.
+//
+// File scope rather than inside a handler: several JSON builders need it and
+// they do not all live under the same feature guard.
+#define JB_CLAMP(o) do { \
+    if ((o) < 0) (o) = 0; \
+    if ((size_t)(o) >= sizeof(jb)) (o) = (int)sizeof(jb) - 1; \
+} while (0)
 
 // ── Embedded HTML ─────────────────────────────────────────────────────────────
 
@@ -394,6 +429,49 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
         get_cookie(req, "sid", sid, sizeof(sid));
     }
 
+#if ENABLE_AP_MODE
+    // Hiding a tab is cosmetic — the endpoints behind it would still answer.
+    // In setup mode the only paths that exist are the ones needed to log in and
+    // provision WiFi. Anything that can reach the HID queue is refused outright,
+    // so an attacker who joins the setup network and skips the UI gets a 403
+    // rather than your host's keyboard.
+    if (ap_mode_active() && strcmp(method, "OPTIONS") != 0) {
+        static const char *allowed[] = {
+            "/", "/favicon.ico",
+            // Login is a three-step handshake: authinfo, challenge, auth.
+            // Omitting /api/challenge 403s the middle step and the page reports
+            // "Cannot start login" with no way to get in at all.
+            "/api/authinfo", "/api/challenge", "/api/auth", "/api/logout",
+            // Read-only session and status, used by the page shell on every
+            // load. None of these touch the HID queue.
+            "/api/whoami", "/api/ping", "/api/hostinfo",
+            "/api/wifi", "/api/wifi/scan", "/api/wifi/forget",
+            "/api/wifi/save", "/api/wifi/apply",
+            "/api/keymap", "/api/keymap/save", "/api/keymap/reset",
+            "/api/keymap/encoders",
+            "/api/macro", "/api/macro/save", "/api/macro/clear",
+            "/api/autoclick", "/api/autoclick/save", "/api/autoclick/reset",
+            "/api/settings", "/api/settings/save", "/api/settings/reset",
+        };
+        // /api/keymap/info, /api/keymap/layout and /api/keymap/<n> are all
+        // GET-only reads under one prefix, so match the prefix rather than
+        // enumerating every layer index.
+        static const char *allowed_prefix[] = { "/api/keymap/" };
+
+        bool ok = false;
+        for (size_t i = 0; i < sizeof(allowed)/sizeof(allowed[0]) && !ok; i++)
+            if (strcmp(path, allowed[i]) == 0) ok = true;
+        for (size_t i = 0; i < sizeof(allowed_prefix)/sizeof(allowed_prefix[0]) && !ok; i++)
+            if (strncmp(path, allowed_prefix[i], strlen(allowed_prefix[i])) == 0) ok = true;
+
+        if (!ok) {
+            http_json(pcb, 403, "{\"error\":\"setup_mode\","
+                                "\"detail\":\"setup mode serves WiFi and keymap configuration only\"}");
+            return;
+        }
+    }
+#endif
+
     // ── CORS preflight ────────────────────────────────────────────────────────
     if (strcmp(method, "OPTIONS") == 0) {
         const char *r = "HTTP/1.0 204 No Content\r\n"
@@ -484,8 +562,48 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
             if (strcmp(MAIN_TABS[i].id, "irdb") == 0) continue;   // IR not built in
             if (strcmp(MAIN_TABS[i].id, "learn") == 0) continue;  // capture not built in
 #endif
-            if (!gate || tab_user_allowed(who, MAIN_TABS[i].id))
-                frags[n++] = MAIN_TABS[i].html;
+#if !(ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP)
+            if (strcmp(MAIN_TABS[i].id, "keymap") == 0) continue;  // no runtime keymap
+#endif
+#if !ENABLE_SETTINGS
+            if (strcmp(MAIN_TABS[i].id, "settings") == 0) continue;
+#endif
+#if !ENABLE_AP_MODE
+            if (strcmp(MAIN_TABS[i].id, "wifi") == 0) continue;    // no credential store
+#else
+            // Setup mode serves configuration, not control. WIFI and KEYMAP
+            // change what the device will do later; the other tabs type and
+            // click on the host RIGHT NOW, and this page is reachable by anyone
+            // in radio range holding the AP password. See the note on the API
+            // allowlist above — hiding these is only half of it.
+            if (ap_mode_active() &&
+                strcmp(MAIN_TABS[i].id, "wifi") != 0 &&
+                strcmp(MAIN_TABS[i].id, "keymap") != 0 &&
+                strcmp(MAIN_TABS[i].id, "settings") != 0) continue;
+#endif
+            bool allowed = !gate || tab_user_allowed(who, MAIN_TABS[i].id);
+#if ENABLE_AP_MODE
+            // Setup mode ignores per-user tab grants for the tabs it serves.
+            //
+            // TAB_GRANTS lives in env.h, so it can only be changed by
+            // reflashing — and gating the recovery path behind a list you need
+            // a reflash to edit is precisely the trap AP mode exists to avoid.
+            // A non-admin user with grants configured would otherwise log into
+            // setup mode and find a page with no tabs on it at all.
+            //
+            // Nothing is widened by this: the session is already authenticated,
+            // and the API allowlist above still decides what is reachable.
+            if (ap_mode_active()) allowed = true;
+#endif
+            if (allowed) frags[n++] = MAIN_TABS[i].html;
+        }
+        // n == 1 means HEAD only: every tab was filtered out and the user gets a
+        // header and a log box. Say so, because from the browser it looks like
+        // the page simply failed to load.
+        if (n == 1) {
+            printf("[web] WARNING: no tabs served to '%s'"
+                   " — check TAB_GRANTS in env.h\n",
+                   (who && who[0]) ? who : "(anonymous)");
         }
         frags[n++] = MAIN_FOOTER;
         http_send_fragments(pcb, frags, n);
@@ -564,6 +682,57 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
         return;
     }
 
+#if ENABLE_PASSWORD_STORE
+    // ── Login password ────────────────────────────────────────────────────────
+    //   GET  /api/password         status only — never a password, not even a hash
+    //   POST /api/password         {"current":"..","new":".."}
+    //   POST /api/password/reset   {"current":".."} back to the compiled password
+    //
+    // Deliberately absent from the AP-mode allowlist above: setup mode exists to
+    // get a device onto a network, and letting it change the login would make
+    // "join the setup AP" a way to take the device over.
+    //
+    // The change is applied to RAM immediately and the flash write is queued;
+    // there is no separate save step, because a password change you have to
+    // remember to save is one that silently reverts at the next power cycle.
+    // ALLOW_PLAINTEXT_AUTH=0 is a deliberate statement that no password may
+    // cross this network, and login honours it by never sending one. Changing a
+    // password cannot: the new one has to reach the device somehow. Rather than
+    // quietly making that setting a half-truth, refuse over plain HTTP and say
+    // why — HTTPS satisfies both, since the password is then encrypted in
+    // transit and the operator's requirement is met.
+    #define PW_CHANGE_ALLOWED (ALLOW_PLAINTEXT_AUTH || ENABLE_HTTPS)
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/password") == 0) {
+        int uidx = auth_token_user_index(sid);
+        if (uidx < 0) uidx = 0;
+        // 512, and the user name clamped: the fixed part plus the longest `why`
+        // is already ~300 bytes, so a long USER_LIST name would have truncated
+        // the JSON mid-string. snprintf would not overflow, but the page would
+        // get unparseable JSON and hide the panel with nothing to explain it.
+        char jb[512];
+        snprintf(jb, sizeof(jb),
+            "{\"ok\":true,\"user\":\"%.64s\",\"multiuser\":%s,\"min_len\":%u,"
+            "\"max_len\":%u,\"changed\":%s,\"stored\":%s,\"saving\":%s,"
+            "\"build_id\":\"%s\",\"secure\":%s,\"can_change\":%s,\"why\":\"%s\"}",
+            auth_user_name(uidx),
+            auth_is_multiuser() ? "true" : "false",
+            (unsigned)WEB_PASSWORD_MIN_LEN, (unsigned)AUTH_PW_MAX,
+            auth_store_password(uidx) ? "true" : "false",
+            auth_store_stored() ? "true" : "false",
+            auth_store_save_pending() ? "true" : "false",
+            auth_store_build_id_str(),
+            ENABLE_HTTPS ? "true" : "false",
+            PW_CHANGE_ALLOWED ? "true" : "false",
+            PW_CHANGE_ALLOWED ? "" :
+                "this firmware was built with ALLOW_PLAINTEXT_AUTH=0, so no "
+                "password may cross the network - setting one requires "
+                "ENABLE_HTTPS");
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
     // Who am I? (used by the UI to tailor what it shows per user)
     if (strcmp(method, "GET") == 0 && strcmp(path, "/api/whoami") == 0) {
         const char *who = auth_user_name(auth_token_user_index(sid));
@@ -572,6 +741,348 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
         http_json(pcb, 200, jb);
         return;
     }
+
+
+#if ENABLE_KEYBOARD && KB_FEATURE_AUTOCLICK
+    // ── Autoclick slots ───────────────────────────────────────────────────────
+    //   GET  /api/autoclick        every slot
+    //   POST /api/autoclick        {"slot":n,"target":kc,"interval_ms":ms,"trigger":bits}
+    //   POST /api/autoclick/save   persist to flash (queued)
+    //   POST /api/autoclick/reset  {"erase":bool} back to the compiled slots
+    //
+    // `target` is an ordinary keycode, so a slot can repeat a mouse button, a
+    // letter, LCTL(KC_V), a macro — anything the feature chain understands.
+    //
+    // Guarded on AUTOCLICK alone, not on DYNAMIC_KEYMAP: editing a slot has
+    // nothing to do with editing the keymap, and tying them together would make
+    // a board that wants one have to take the other.
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/autoclick") == 0) {
+        static char jb[640];
+        int o = snprintf(jb, sizeof(jb),
+            "{\"ok\":true,\"count\":%u,\"min_ms\":%u,\"max_ms\":%u,"
+            "\"tap_window_ms\":%u,\"stored\":%s,\"dirty\":%s,\"saving\":%s,"
+            "\"rate_override_ms\":%u,\"slots\":[",
+            autoclick_count(), (unsigned)AC_MIN_INTERVAL_MS,
+            (unsigned)AC_MAX_INTERVAL_MS, (unsigned)AC_TAP_WINDOW_MS,
+            autoclick_stored() ? "true" : "false",
+            autoclick_dirty()  ? "true" : "false",
+            autoclick_save_pending() ? "true" : "false",
+#if ENABLE_SETTINGS
+            (unsigned)settings()->autoclick_ms);
+#else
+            0u);
+#endif
+        JB_CLAMP(o);
+        for (uint8_t i = 0; i < autoclick_count(); i++) {
+            const autoclick_slot_t *s = autoclick_slot(i);
+            if (!s || (size_t)o > sizeof(jb) - 64) break;
+            o += snprintf(jb + o, sizeof(jb) - o,
+                          "%s{\"target\":%u,\"interval_ms\":%u,\"trigger\":%u}",
+                          i ? "," : "", (unsigned)s->target,
+                          (unsigned)s->interval_ms, (unsigned)s->trigger);
+            JB_CLAMP(o);
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
+#if ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP
+    // ── Runtime keymap ────────────────────────────────────────────────────────
+    //   GET  /api/keymap/info   dimensions + whether flash holds a keymap
+    //   GET  /api/keymap/layout physical key geometry, if the board defines any
+    //   GET  /api/keymap/<n>    one layer's keycodes
+    //   POST /api/keymap        {"layer":n,"keys":[...]}  — applies immediately
+    //   POST /api/keymap/save   persist to flash (queued; core 0 does the write)
+    //   POST /api/keymap/reset  {"erase":bool} back to the compiled keymap
+    //
+    // A layer at a time, not the whole keymap: HTTP_RECV_BUF is 4096 and one
+    // layer of a full-size board is a few hundred bytes, so this stays well
+    // inside the buffer on any matrix worth building.
+
+    // Response buffer sized for one layer: 6 chars per keycode is enough for
+    // "65535," and the rest is the fixed envelope.
+    #define KM_JSON_MAX (MATRIX_ROWS * MATRIX_COLS * 7 + 160)
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/keymap/info") == 0) {
+        static char jb[896];
+        int o = snprintf(jb, sizeof(jb),
+            "{\"ok\":true,\"board\":\"%s\",\"rows\":%d,\"cols\":%d,"
+            "\"layers\":%u,\"compiled_layers\":%u,\"encoders\":%u,"
+            "\"stored\":%s,\"dirty\":%s,\"saving\":%s",
+            KB_BOARD_NAME, MATRIX_ROWS, MATRIX_COLS,
+            kb_keymap_layers(), keymap_layer_count, kb_encoder_count(),
+            kb_keymap_stored() ? "true" : "false",
+            kb_keymap_dirty()  ? "true" : "false",
+            kb_keymap_save_pending() ? "true" : "false");
+        JB_CLAMP(o);
+
+        // Which keycode families this firmware will actually act on. Without
+        // this the editor can only guess: a feature compiled out still has its
+        // keycodes in the picker, and setting one produces a key that is stored,
+        // displayed, and completely inert — the failure mode that made autoclick
+        // look absent rather than disabled.
+        //
+        // `autoclick` is a COUNT, not a flag, because the slot number in
+        // AUTOCLK(n) has to be in range too; a board with 3 slots must not offer
+        // slot 7.
+        o += snprintf(jb + o, sizeof(jb) - o,
+            ",\"features\":{\"consumer\":%s,\"mousekeys\":%s,\"macros\":%s,"
+            "\"layers\":%s,\"oneshot\":%s,\"caps_word\":%s,\"autoclick\":%u}",
+            KB_FEATURE_CONSUMER  ? "true" : "false",
+            KB_FEATURE_MOUSEKEYS ? "true" : "false",
+            KB_FEATURE_MACROS    ? "true" : "false",
+            KB_FEATURE_LAYERS    ? "true" : "false",
+            KB_FEATURE_ONESHOT   ? "true" : "false",
+            KB_FEATURE_CAPS_WORD ? "true" : "false",
+            (unsigned)(KB_FEATURE_AUTOCLICK ? NUM_AUTOCLICKS : 0));
+        JB_CLAMP(o);
+
+#if SPLIT_ENABLE
+        // The module table, so the editor can say which rows belong to which
+        // physical board. Without it a modular keyboard is one undifferentiated
+        // grid and you have to remember that rows 4-7 are the right hand.
+        //
+        // `online` is included because the most useful thing this view can tell
+        // you is that the module you are editing is not currently answering.
+        o += snprintf(jb + o, sizeof(jb) - o, ",\"modules\":[");
+        JB_CLAMP(o);
+        for (uint8_t i = 0; i < split_module_count; i++) {
+            const split_module_t *m = &SPLIT_MODULE_TABLE_PTR[i];
+            if ((size_t)o > sizeof(jb) - 96) break;
+            o += snprintf(jb + o, sizeof(jb) - o,
+                          "%s{\"id\":%u,\"rows\":%u,\"cols\":%u,\"row_offset\":%u,"
+                          "\"encoders\":%u,\"primary\":%s,\"online\":%s}",
+                          i ? "," : "", m->id, m->rows, m->cols, m->row_offset,
+                          m->encoders, i == 0 ? "true" : "false",
+                          split_module_online(m->id) ? "true" : "false");
+            JB_CLAMP(o);
+        }
+        o += snprintf(jb + o, sizeof(jb) - o, "]");
+        JB_CLAMP(o);
+#endif
+        snprintf(jb + o, sizeof(jb) - o, "}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+
+
+
+#if ENABLE_AP_MODE
+    // ── WiFi provisioning ─────────────────────────────────────────────────────
+    //   GET  /api/wifi         known networks + whether we are in AP mode
+    //   POST /api/wifi         {"ssid":"..","password":"..","auth":0}
+    //   POST /api/wifi/forget  {"ssid":".."}
+    //   POST /api/wifi/save    persist to flash (queued)
+    //   POST /api/wifi/apply   save, then reboot into station mode
+    //
+    // Passwords are NEVER returned. The UI shows which networks are known and
+    // lets you replace one, but cannot read a secret back out of the device —
+    // an authenticated session should not be a credential dump.
+
+
+#if ENABLE_SETTINGS
+    //   GET  /api/settings         every field with value, default, range, help
+    //   POST /api/settings         {"field":"name","value":n}
+    //   POST /api/settings/reset   {"field":"name"} or {"all":true}
+    //   POST /api/settings/save    persist to flash (queued)
+    //
+    // The response is generated from the table in settings.cpp, so the page
+    // renders whatever the firmware actually has rather than a hand-maintained
+    // copy that drifts.
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/settings") == 0) {
+        static char jb[1800];
+        settings_to_json(jb, sizeof(jb));
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/wifi/scan") == 0) {
+        // Cached, not live: by the time anyone asks, the chip is an access point
+        // and cannot survey the air. Captured in main() before the AP came up.
+        static char jb[1200];
+        int o = snprintf(jb, sizeof(jb), "{\"ok\":true,\"cached\":true,\"networks\":[");
+        for (uint8_t i = 0; i < wifi_scan_cache_count(); i++) {
+            const wifi_scan_entry_t *e = wifi_scan_cache_get(i);
+            if (!e || (size_t)o > sizeof(jb) - 80) break;
+            o += snprintf(jb + o, sizeof(jb) - o,
+                          "%s{\"ssid\":\"%s\",\"rssi\":%d,\"secure\":%s}",
+                          i ? "," : "", e->ssid, e->rssi,
+                          e->secure ? "true" : "false");
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/wifi") == 0) {
+        static char jb[1024];
+        int o = snprintf(jb, sizeof(jb),
+                         "{\"ok\":true,\"ap_mode\":%s,\"dirty\":%s,\"stored\":%u,"
+                         "\"max\":%d,\"networks\":[",
+                         ap_mode_active() ? "true" : "false",
+                         wifi_store_dirty() ? "true" : "false",
+                         wifi_store_count(), WIFI_STORE_MAX);
+        for (uint8_t i = 0; i < wifi_store_count(); i++) {
+            const wifi_cred_t *c = wifi_store_get(i);
+            if (!c || (size_t)o > sizeof(jb) - 80) break;
+            o += snprintf(jb + o, sizeof(jb) - o,
+                          "%s{\"ssid\":\"%s\",\"auth\":%u,\"source\":\"stored\"}",
+                          i ? "," : "", c->ssid, c->auth_mode);
+        }
+        for (size_t i = 0; i < WIFI_NETWORK_COUNT; i++) {
+            if ((size_t)o > sizeof(jb) - 80) break;
+            o += snprintf(jb + o, sizeof(jb) - o,
+                          "%s{\"ssid\":\"%s\",\"auth\":%d,\"source\":\"compiled\"}",
+                          (i || wifi_store_count()) ? "," : "",
+                          WIFI_NETWORKS[i].ssid, WIFI_NETWORKS[i].auth_mode);
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
+#if ENABLE_KEYBOARD && KB_FEATURE_MACRO_STORE
+    // ── Macro bodies ──────────────────────────────────────────────────────────
+    //   GET  /api/macro          all macros as step lists
+    //   POST /api/macro          {"id":n,"steps":[...]}  — live immediately
+    //   POST /api/macro/save     persist to flash (queued)
+    //   POST /api/macro/clear    delete every macro
+    //
+    // Steps use the same vocabulary as the custom-button tab:
+    //   {"t":"tap","mod":2,"key":4} {"t":"down",...} {"t":"up",...}
+    //   {"t":"delay","ms":250}      {"t":"text","value":"hi"}
+    // The firmware assembles them into bytecode and verifies before storing, so
+    // the interpreter on core 1 never has to bounds-check in its hot path.
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/macro") == 0) {
+        static char jb[3200];
+        int o = snprintf(jb, sizeof(jb),
+                         "{\"ok\":true,\"count\":%d,\"used\":%u,\"size\":%u,"
+                         "\"dirty\":%s,\"stored\":%s,\"macros\":[",
+                         KB_MACRO_COUNT, kb_macro_pool_used(), kb_macro_pool_size(),
+                         kb_macro_dirty() ? "true" : "false",
+                         kb_macro_stored() ? "true" : "false");
+        bool first = true;
+        for (uint8_t i = 0; i < KB_MACRO_COUNT; i++) {
+            uint16_t len = 0;
+            const uint8_t *b = kb_macro_body(i, &len);
+            if (!b) continue;
+            if ((size_t)o > sizeof(jb) - 96) break;
+            o += snprintf(jb + o, sizeof(jb) - o, "%s{\"id\":%u,\"steps\":[",
+                          first ? "" : ",", i);
+            first = false;
+            bool fs = true;
+            for (uint16_t k = 0; k < len && b[k] != MOP_END; ) {
+                if ((size_t)o > sizeof(jb) - 96) break;
+                const char *sep = fs ? "" : ","; fs = false;
+                switch (b[k]) {
+                case MOP_TAP: case MOP_DOWN: case MOP_UP:
+                    o += snprintf(jb + o, sizeof(jb) - o,
+                                  "%s{\"t\":\"%s\",\"mod\":%u,\"key\":%u}", sep,
+                                  b[k] == MOP_TAP ? "tap" : b[k] == MOP_DOWN ? "down" : "up",
+                                  b[k+1], b[k+2]);
+                    k += 3;
+                    break;
+                case MOP_DELAY:
+                    o += snprintf(jb + o, sizeof(jb) - o, "%s{\"t\":\"delay\",\"ms\":%u}",
+                                  sep, (unsigned)(b[k+1] | (b[k+2] << 8)));
+                    k += 3;
+                    break;
+                case MOP_TEXT: {
+                    uint8_t n = b[k+1];
+                    o += snprintf(jb + o, sizeof(jb) - o, "%s{\"t\":\"text\",\"value\":\"", sep);
+                    for (uint8_t c = 0; c < n && (size_t)o < sizeof(jb) - 8; c++) {
+                        char ch = (char)b[k+2+c];
+                        if (ch == '"' || ch == '\\') jb[o++] = '\\';
+                        if (ch == '\n') { jb[o++] = '\\'; ch = 'n'; }
+                        jb[o++] = ch;
+                    }
+                    o += snprintf(jb + o, sizeof(jb) - o, "\"}");
+                    k += 2 + n;
+                    break;
+                }
+                default: k = len; break;
+                }
+            }
+            o += snprintf(jb + o, sizeof(jb) - o, "]}");
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
+    if (strcmp(method, "GET") == 0 && strcmp(path, "/api/keymap/layout") == 0) {
+        // Trailing fields are omitted when they hold their defaults, so an
+        // ordinary 1u unrotated key costs "[r,c,x,y]," and a 100-key board fits
+        // comfortably inside one TCP write (TCP_SND_BUF is 8*MSS).
+        static char jb[MATRIX_ROWS * MATRIX_COLS * 26 + 128];
+        int o = snprintf(jb, sizeof(jb),
+                         "{\"ok\":true,\"unit\":%d,\"keys\":[", KB_LAYOUT_UNIT);
+        for (uint16_t i = 0; i < kb_layout_count; i++) {
+            const kb_layout_key_t *k = &kb_layout[i];
+            if ((size_t)o > sizeof(jb) - 40) break;   // never overrun; truncate cleanly
+            o += snprintf(jb + o, sizeof(jb) - o, "%s[%u,%u,%u,%u",
+                          i ? "," : "", k->row, k->col, k->x, k->y);
+            if (k->rot)
+                o += snprintf(jb + o, sizeof(jb) - o, ",%u,%u,%d,%u,%u",
+                              k->w, k->h, k->rot, k->rx, k->ry);
+            else if (k->w != KB_LAYOUT_UNIT || k->h != KB_LAYOUT_UNIT)
+                o += snprintf(jb + o, sizeof(jb) - o, ",%u,%u", k->w, k->h);
+            o += snprintf(jb + o, sizeof(jb) - o, "]");
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+
+    //   GET  /api/keymap/encoders/<n>  one layer's encoder actions
+    if (strcmp(method, "GET") == 0 &&
+        strncmp(path, "/api/keymap/encoders/", 21) == 0) {
+        int layer = atoi(path + 21);
+        if (layer < 0 || layer >= (int)kb_keymap_layers()) {
+            http_json(pcb, 404, "{\"error\":\"bad_layer\"}");
+            return;
+        }
+        static char jb[512];
+        int o = snprintf(jb, sizeof(jb),
+                         "{\"ok\":true,\"layer\":%d,\"encoders\":[", layer);
+        for (uint8_t e = 0; e < kb_encoder_count(); e++) {
+            if ((size_t)o > sizeof(jb) - 40) break;
+            /* [CCW, CW, press] — the same order as encoder_map[][][3], so the
+             * page, the store and the keymap all index it identically. */
+            o += snprintf(jb + o, sizeof(jb) - o, "%s[%u,%u,%u]", e ? "," : "",
+                          kb_encoder_at((uint8_t)layer, e, 0),
+                          kb_encoder_at((uint8_t)layer, e, 1),
+                          kb_encoder_at((uint8_t)layer, e, 2));
+        }
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+
+    if (strcmp(method, "GET") == 0 && strncmp(path, "/api/keymap/", 12) == 0) {
+        int layer = atoi(path + 12);
+        if (layer < 0 || layer >= (int)kb_keymap_layers()) {
+            http_json(pcb, 404, "{\"error\":\"bad_layer\"}");
+            return;
+        }
+        static char jb[KM_JSON_MAX];
+        int o = snprintf(jb, sizeof(jb), "{\"ok\":true,\"layer\":%d,\"keys\":[", layer);
+        for (int r = 0; r < MATRIX_ROWS; r++)
+            for (int c = 0; c < MATRIX_COLS; c++)
+                o += snprintf(jb + o, sizeof(jb) - o, "%s%u",
+                              (r || c) ? "," : "",
+                              kb_keymap_at((uint8_t)layer, (uint8_t)r, (uint8_t)c));
+        snprintf(jb + o, sizeof(jb) - o, "]}");
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif // ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP
 
 #if ENABLE_REMOTES
     // Diagnostic: ISR-independent probe of the IR RX pin. Hit this while pressing
@@ -626,6 +1137,459 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
         return;
     }
 
+
+#if ENABLE_PASSWORD_STORE
+    if (strcmp(path, "/api/password") == 0 ||
+        strcmp(path, "/api/password/reset") == 0) {
+
+        if (!PW_CHANGE_ALLOWED) {
+            http_json(pcb, 403, "{\"error\":\"plaintext_forbidden\",\"detail\":"
+                                "\"ALLOW_PLAINTEXT_AUTH=0 and this is not HTTPS\"}");
+            return;
+        }
+
+        const bool reset = (strcmp(path, "/api/password/reset") == 0);
+        int uidx = auth_token_user_index(sid);
+        if (uidx < 0) uidx = 0;
+
+        // Buffers, not pointers into `body`: the request buffer is reused and
+        // the password has to outlive the parse.
+        char cur[AUTH_PW_MAX + 2] = {}, neu[AUTH_PW_MAX + 2] = {};
+        web_json_str(body, "current", cur, sizeof(cur));
+        if (!reset) web_json_str(body, "new", neu, sizeof(neu));
+
+        // An authenticated session is not enough. A password change is the one
+        // action that can lock the owner out, so it re-proves knowledge of the
+        // current password — which also means a walked-up-to unlocked browser
+        // cannot take the device away from you.
+        //
+        // Through auth_authenticate() rather than a bare strcmp, so wrong
+        // guesses here count towards the same lockout as wrong guesses at the
+        // login page. Otherwise this endpoint is an unthrottled oracle for the
+        // password the login page carefully refuses to let you brute-force.
+        //
+        // AUTH_DISABLED means no user has a password at all, so there is no
+        // current one to prove and nothing to protect — that is the case where
+        // this endpoint turns auth ON, which it must not refuse to do.
+        uint32_t retry = 0;
+        auth_result_t ar = auth_authenticate(auth_user_name(uidx), cur, &retry);
+        if (ar == AUTH_LOCKED) {
+            char jb[96];
+            snprintf(jb, sizeof(jb),
+                     "{\"error\":\"locked\",\"retry_after_s\":%u}", (unsigned)retry);
+            http_json(pcb, 429, jb);
+            return;
+        }
+        if (ar != AUTH_OK && ar != AUTH_DISABLED) {
+            http_json(pcb, 403, "{\"error\":\"wrong_password\",\"detail\":"
+                                "\"the current password is required to change it\"}");
+            return;
+        }
+
+        if (reset) {
+            // Checked, not assumed: reporting ok:true on a store that refused
+            // the write would tell someone their password had been reverted
+            // when it had not.
+            if (!auth_store_set(uidx, NULL)) {
+                http_json(pcb, 400, "{\"error\":\"rejected\"}");
+                return;
+            }
+            auth_invalidate_user_tokens(uidx, sid);
+            auth_touch();
+            http_json(pcb, 200, "{\"ok\":true,\"reset\":true}");
+            return;
+        }
+
+        // The lower bound is also what stops an empty password arriving here: ""
+        // disables auth device-wide, and reaching that state from a web form —
+        // over the network, possibly by a slip — is not something to allow. The
+        // deliberate way to run without a password is PASSWORD "" in env.h.
+        size_t n = strlen(neu);
+        if (n < WEB_PASSWORD_MIN_LEN || n > AUTH_PW_MAX) {
+            char jb[128];
+            snprintf(jb, sizeof(jb),
+                     "{\"error\":\"bad_length\",\"min_len\":%u,\"max_len\":%u}",
+                     (unsigned)WEB_PASSWORD_MIN_LEN, (unsigned)AUTH_PW_MAX);
+            http_json(pcb, 400, jb);
+            return;
+        }
+        if (strcmp(neu, cur) == 0) {
+            http_json(pcb, 400, "{\"error\":\"unchanged\"}");
+            return;
+        }
+        if (!auth_store_set(uidx, neu)) {
+            http_json(pcb, 400, "{\"error\":\"rejected\"}");
+            return;
+        }
+
+        // Every other session for this user was opened with the old password.
+        // Keep this one: signing out the person who just changed it, on a device
+        // whose recovery path is a reflash, is exactly the wrong reflex.
+        int dropped = auth_invalidate_user_tokens(uidx, sid);
+        auth_touch();
+
+        char jb[128];
+        snprintf(jb, sizeof(jb),
+                 "{\"ok\":true,\"queued\":true,\"sessions_ended\":%d}", dropped);
+        http_json(pcb, 200, jb);
+        return;
+    }
+#endif
+
+#if ENABLE_KEYBOARD && KB_FEATURE_AUTOCLICK
+    if (strcmp(path, "/api/autoclick") == 0) {
+        int slot    = web_json_int(body, "slot", -1);
+        int target  = web_json_int(body, "target", -1);
+        int ms      = web_json_int(body, "interval_ms", -1);
+        int trigger = web_json_int(body, "trigger", -1);
+
+        if (slot < 0 || slot >= (int)autoclick_count() ||
+            target < 0 || target > 0xFFFF || ms < 0 || trigger < 0) {
+            http_json(pcb, 400, "{\"error\":\"bad params\"}");
+            return;
+        }
+        // Say WHICH constraint failed. "bad params" on a rate of 4 ms sends you
+        // looking at the keycode, and the floor is not a number anyone guesses.
+        if (!autoclick_trigger_valid((uint8_t)trigger)) {
+            http_json(pcb, 400, "{\"error\":\"bad trigger\",\"detail\":"
+                                "\"trigger must be a non-empty mix of 1=hold, "
+                                "2=double-tap, 4=triple-tap, and not both tap counts\"}");
+            return;
+        }
+        if (ms < AC_MIN_INTERVAL_MS || ms > AC_MAX_INTERVAL_MS) {
+            char jb[128];
+            snprintf(jb, sizeof(jb),
+                     "{\"error\":\"bad interval\",\"min_ms\":%u,\"max_ms\":%u}",
+                     (unsigned)AC_MIN_INTERVAL_MS, (unsigned)AC_MAX_INTERVAL_MS);
+            http_json(pcb, 400, jb);
+            return;
+        }
+        if (!autoclick_set_slot((uint8_t)slot, (kb_keycode_t)target,
+                                (uint16_t)ms, (uint8_t)trigger)) {
+            http_json(pcb, 400, "{\"error\":\"rejected\",\"detail\":"
+                                "\"target cannot be KC_NO\"}");
+            return;
+        }
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/autoclick/save") == 0) {
+        autoclick_save();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"queued\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/autoclick/reset") == 0) {
+        autoclick_reset(web_json_int(body, "erase", 0) != 0);
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+#endif
+
+#if ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP
+
+
+
+#if ENABLE_SETTINGS
+    if (strcmp(path, "/api/settings") == 0) {
+        char field[32] = {};
+        web_json_str(body, "field", field, sizeof(field));
+        long value = web_json_int(body, "value", 0);
+        if (!field[0]) { http_json(pcb, 400, "{\"error\":\"no_field\"}"); return; }
+        if (!settings_set(field, value)) {
+            // Out of range is rejected rather than clamped: a silently corrected
+            // value looks like it worked and behaves like something else.
+            http_json(pcb, 400, "{\"error\":\"unknown_field_or_out_of_range\"}");
+            return;
+        }
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/settings/reset") == 0) {
+        if (web_json_int(body, "all", 0)) {
+            settings_reset_all();
+        } else {
+            char field[32] = {};
+            web_json_str(body, "field", field, sizeof(field));
+            if (!settings_reset(field)) {
+                http_json(pcb, 400, "{\"error\":\"unknown_field\"}");
+                return;
+            }
+        }
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/settings/save") == 0) {
+        settings_save_request();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"queued\":true}");
+        return;
+    }
+#endif
+
+#if ENABLE_AP_MODE
+    if (strcmp(path, "/api/wifi") == 0) {
+        char ssid[WIFI_SSID_MAX + 1] = {0};
+        char pass[WIFI_PASS_MAX + 1] = {0};
+        web_json_str(body, "ssid", ssid, sizeof(ssid));
+        if (!ssid[0]) {
+            http_json(pcb, 400, "{\"error\":\"no_ssid\"}");
+            return;
+        }
+        web_json_str(body, "password", pass, sizeof(pass));
+        int auth = web_json_int(body, "auth", 0);
+        if (auth < 0 || auth > 4) auth = 0;
+
+        // An open network is the only case where an empty password is valid.
+        if (auth != 4 && strlen(pass) < 8) {
+            http_json(pcb, 400, "{\"error\":\"password_too_short\"}");
+            return;
+        }
+        if (!wifi_store_set(ssid, pass, (uint8_t)auth)) {
+            http_json(pcb, 400, "{\"error\":\"store_full\"}");
+            return;
+        }
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/wifi/forget") == 0) {
+        char ssid[WIFI_SSID_MAX + 1] = {0};
+        web_json_str(body, "ssid", ssid, sizeof(ssid));
+        bool gone = wifi_store_remove(ssid);
+        auth_touch();
+        http_json(pcb, gone ? 200 : 404,
+                  gone ? "{\"ok\":true}" : "{\"error\":\"not_stored\"}");
+        return;
+    }
+
+    if (strcmp(path, "/api/wifi/save") == 0) {
+        wifi_store_save_request();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"queued\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/wifi/apply") == 0) {
+        // Save, answer, THEN reboot. Rebooting inside the handler leaves the
+        // browser on a dead socket with no idea whether it worked; the delay is
+        // long enough for this response to actually land.
+        wifi_store_save_request();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"rebooting\":true}");
+        ap_mode_request_reboot(1500);
+        return;
+    }
+#endif
+
+#if ENABLE_KEYBOARD && KB_FEATURE_MACRO_STORE
+    if (strcmp(path, "/api/macro") == 0) {
+        int id = web_json_int(body, "id", -1);
+        if (id < 0 || id >= KB_MACRO_COUNT) {
+            http_json(pcb, 400, "{\"error\":\"bad_id\"}");
+            return;
+        }
+
+        // Assemble the step list into bytecode. Scanning for "t" markers rather
+        // than parsing JSON properly is the same trade the rest of this file
+        // makes: a full parser is not worth its flash here, and kb_macro_set()
+        // verifies the result before anything is stored, so a malformed body is
+        // rejected rather than executed.
+        static uint8_t prog[KB_MACRO_POOL];
+        uint16_t n = 0;
+        const char *p = strstr(body, "\"steps\"");
+        bool bad = false;
+
+        if (p) {
+            const char *q = p;
+            while ((q = strstr(q, "\"t\"")) != NULL && !bad) {
+                const char *v = strchr(q, ':');
+                if (!v) break;
+                v++;
+                while (*v == ' ' || *v == '"') v++;
+                const char *scope = strchr(q, '}');
+                if (!scope) break;
+
+                uint8_t op = 0;
+                if      (!strncmp(v, "tap",   3)) op = MOP_TAP;
+                else if (!strncmp(v, "down",  4)) op = MOP_DOWN;
+                else if (!strncmp(v, "up",    2)) op = MOP_UP;
+                else if (!strncmp(v, "delay", 5)) op = MOP_DELAY;
+                else if (!strncmp(v, "text",  4)) op = MOP_TEXT;
+                else { bad = true; break; }
+
+                if (op == MOP_TEXT) {
+                    const char *tv = strstr(q, "\"value\"");
+                    if (!tv || tv > scope) { bad = true; break; }
+                    tv = strchr(tv, ':');
+                    if (!tv) { bad = true; break; }
+                    tv = strchr(tv, '"');
+                    if (!tv) { bad = true; break; }
+                    tv++;
+                    uint8_t len = 0;
+                    static char txt[KB_MACRO_TEXT_MAX + 1];
+                    while (*tv && *tv != '"' && len < KB_MACRO_TEXT_MAX) {
+                        char c = *tv++;
+                        if (c == '\\' && *tv) {          // \n and \" survive the trip
+                            char e = *tv++;
+                            c = (e == 'n') ? '\n' : (e == 't') ? '\t' : e;
+                        }
+                        txt[len++] = c;
+                    }
+                    if (!len || n + 2 + len + 1 > (int)sizeof(prog)) { bad = true; break; }
+                    prog[n++] = MOP_TEXT;
+                    prog[n++] = len;
+                    memcpy(prog + n, txt, len);
+                    n = (uint16_t)(n + len);
+                } else if (op == MOP_DELAY) {
+                    int ms = web_json_int(q, "ms", 0);
+                    if (ms < 0) ms = 0;
+                    if (ms > 65535) ms = 65535;
+                    if (n + 3 + 1 > (int)sizeof(prog)) { bad = true; break; }
+                    prog[n++] = MOP_DELAY;
+                    prog[n++] = (uint8_t)(ms & 0xFF);
+                    prog[n++] = (uint8_t)(ms >> 8);
+                } else {
+                    int mod = web_json_int(q, "mod", 0);
+                    int key = web_json_int(q, "key", 0);
+                    if (n + 3 + 1 > (int)sizeof(prog)) { bad = true; break; }
+                    prog[n++] = op;
+                    prog[n++] = (uint8_t)(mod & 0xFF);
+                    prog[n++] = (uint8_t)(key & 0xFF);
+                }
+                q = scope;
+            }
+        }
+
+        if (bad) { http_json(pcb, 400, "{\"error\":\"bad_steps\"}"); return; }
+
+        if (n == 0) {
+            kb_macro_set((uint8_t)id, NULL, 0);          // empty list = delete
+        } else {
+            prog[n++] = MOP_END;
+            if (!kb_macro_set((uint8_t)id, prog, n)) {
+                http_json(pcb, 400, "{\"error\":\"rejected_or_full\"}");
+                return;
+            }
+        }
+        auth_touch();
+        static char jb[96];
+        snprintf(jb, sizeof(jb), "{\"ok\":true,\"bytes\":%u,\"used\":%u,\"size\":%u}",
+                 n, kb_macro_pool_used(), kb_macro_pool_size());
+        http_json(pcb, 200, jb);
+        return;
+    }
+
+    if (strcmp(path, "/api/macro/save") == 0) {
+        kb_macro_save_request();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"queued\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/macro/clear") == 0) {
+        kb_macro_clear_all();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+#endif
+
+    if (strcmp(path, "/api/keymap/encoders") == 0) {
+        int layer = web_json_int(body, "layer", -1);
+        int index = web_json_int(body, "index", -1);
+        int action = web_json_int(body, "action", -1);
+        int kc = web_json_int(body, "kc", -1);
+        if (layer < 0 || layer >= (int)kb_keymap_layers() ||
+            index < 0 || index >= (int)kb_encoder_count() ||
+            action < 0 || action > 2 || kc < 0 || kc > 0xFFFF) {
+            http_json(pcb, 400, "{\"error\":\"bad_encoder_request\"}");
+            return;
+        }
+        /* One action at a time, unlike the keymap which is sent a whole layer:
+         * there are three of these per encoder, so a partial write has nothing
+         * to be inconsistent with. */
+        if (!kb_encoder_set((uint8_t)layer, (uint8_t)index,
+                            (uint8_t)action, (uint16_t)kc)) {
+            http_json(pcb, 400, "{\"error\":\"rejected\"}");
+            return;
+        }
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"live\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/keymap") == 0) {
+        int layer = web_json_int(body, "layer", -1);
+        if (layer < 0 || layer >= (int)kb_keymap_layers()) {
+            http_json(pcb, 400, "{\"error\":\"bad_layer\"}");
+            return;
+        }
+        // Parse the keycode array inline rather than reusing web_json_u16_arr,
+        // which lives inside the ENABLE_REMOTES block.
+        static uint16_t keys[MATRIX_ROWS * MATRIX_COLS];
+        int n = 0;
+        const char *p = strstr(body, "\"keys\"");
+        if (p) p = strchr(p, '[');
+        if (p) {
+            p++;
+            while (n < MATRIX_ROWS * MATRIX_COLS) {
+                while (*p == ' ' || *p == ',') p++;
+                if (*p == ']' || !*p) break;
+                if (*p < '0' || *p > '9') break;
+                long v = 0;
+                while (*p >= '0' && *p <= '9') { v = v * 10 + (*p++ - '0'); if (v > 65535) v = 65535; }
+                keys[n++] = (uint16_t)v;
+            }
+        }
+        if (n != MATRIX_ROWS * MATRIX_COLS) {
+            // Refuse a partial layer outright. Applying what arrived would leave
+            // the tail of the layer holding whatever it held before, which is a
+            // far more confusing failure than a rejected request.
+            static char jb[96];
+            snprintf(jb, sizeof(jb), "{\"error\":\"expected_%d_keys\",\"got\":%d}",
+                     MATRIX_ROWS * MATRIX_COLS, n);
+            http_json(pcb, 400, jb);
+            return;
+        }
+        int i = 0;
+        for (int r = 0; r < MATRIX_ROWS; r++)
+            for (int c = 0; c < MATRIX_COLS; c++)
+                kb_keymap_set((uint8_t)layer, (uint8_t)r, (uint8_t)c, keys[i++]);
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"live\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/keymap/save") == 0) {
+        // Queue it. The erase parks core 1 and disables interrupts for ~50-100 ms,
+        // which must not happen inside this lwIP callback — core 0's main loop
+        // picks it up on the next pass. Answer now so the client is not waiting
+        // on a connection that is about to stall.
+        kb_keymap_save_request();
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true,\"queued\":true}");
+        return;
+    }
+
+    if (strcmp(path, "/api/keymap/reset") == 0) {
+        bool erase = web_json_int(body, "erase", 0) != 0;
+        kb_keymap_reset(erase);
+        auth_touch();
+        http_json(pcb, 200, "{\"ok\":true}");
+        return;
+    }
+#endif // ENABLE_KEYBOARD && KB_FEATURE_DYNAMIC_KEYMAP
+
     if (strcmp(path, "/api/combo") == 0 || strcmp(path, "/api/key") == 0) {
         // Tap a key report: press AND release. /api/combo is the canonical name
         // (matching the socket, where combo = tap); /api/key is kept as an alias
@@ -662,16 +1626,8 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
         if (x > HID_ABS_MAX) x = HID_ABS_MAX;
         if (y < 0) y = 0;
         if (y > HID_ABS_MAX) y = HID_ABS_MAX;
-        hid_abs_report_t rep={
-            .buttons=(uint8_t)buttons,
-            .x=(uint16_t)x, .y=(uint16_t)y,
-            .wheel=(int8_t)(wheel>127?127:wheel<-127?-127:wheel),
-        };
-        hid_push_abs_report(&rep);
-        if (buttons) {
-            hid_abs_report_t rel=rep; rel.buttons=0;
-            hid_push_abs_report(&rel);
-        }
+        hid_push_abs_pointer((uint16_t)x, (uint16_t)y, (uint8_t)buttons,
+                             (int8_t)(wheel > 127 ? 127 : wheel < -127 ? -127 : wheel));
         auth_touch();
         http_json(pcb, 200, "{\"ok\":true}");
 
@@ -854,3 +1810,17 @@ void web_init(void) {
              auth_is_enabled() ? "enabled" : "DISABLED");
     dbg(m);
 }
+
+#if ENABLE_AP_MODE
+void web_init_plain(uint16_t port) {
+    memset(http_pcbs, 0, sizeof(http_pcbs));
+    memset(http_conns, 0, sizeof(http_conns));
+    net_pcb *lpcb = net_listen_plaintext(port, web_accept_cb, MAX_HTTP_CONN);
+    if (!lpcb) {
+        printf("[web] AP-mode listen on :%u FAILED: %s\n",
+               port, net_listen_fail ? net_listen_fail : "unknown");
+        return;
+    }
+    printf("[web] AP setup server on port %u (HTTP, auth enforced)\n", port);
+}
+#endif

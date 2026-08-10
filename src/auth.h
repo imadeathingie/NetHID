@@ -61,6 +61,12 @@ void auth_invalidate_token(const char *token);
 // Index of the user a (valid) token belongs to, or -1 if unknown/invalid.
 int  auth_token_user_index(const char *token);
 
+// Drop every session belonging to `user_idx`, except the one holding `keep`
+// (pass NULL to drop all). Returns how many were dropped. Called when a
+// password changes: a session opened with the old password must not survive it,
+// but signing the person making the change straight back out is hostile.
+int  auth_invalidate_user_tokens(int user_idx, const char *keep);
+
 // ── Status ────────────────────────────────────────────────────────────────────
 typedef struct {
     bool     authenticated;

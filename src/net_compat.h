@@ -17,7 +17,7 @@
 
 // Set by net_http_listen() to a short reason on failure; web_init() reports it
 // via dbg() (which is HID-typed and therefore visible without a serial console).
-static const char *net_listen_fail = 0;
+__attribute__((unused)) static const char *net_listen_fail = 0;
 
 #if ENABLE_HTTPS
 // ── TLS path: application-layered TCP over mbedTLS ────────────────────────────

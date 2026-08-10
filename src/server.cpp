@@ -127,12 +127,9 @@ static void handle_json(const char *line, net_pcb *pcb, int user_idx) {
         // Absolute position. x/y are 0..32767 over the full screen.
         int x = json_int(line,"x",0); if (x<0) x=0; if (x>HID_ABS_MAX) x=HID_ABS_MAX;
         int y = json_int(line,"y",0); if (y<0) y=0; if (y>HID_ABS_MAX) y=HID_ABS_MAX;
-        hid_abs_report_t rep = {
-            .buttons=(uint8_t)json_int(line,"buttons",0),
-            .x=(uint16_t)x, .y=(uint16_t)y,
-            .wheel=clamp8(json_int(line,"wheel",0)),
-        };
-        hid_push_abs_report(&rep);
+        hid_push_abs_pointer((uint16_t)x, (uint16_t)y,
+                             (uint8_t)json_int(line,"buttons",0),
+                             clamp8(json_int(line,"wheel",0)));
 
     } else if (strcmp(t, "text") == 0) {
         char text[256]={};
@@ -226,10 +223,8 @@ static int handle_binary(const uint8_t *buf, size_t len, net_pcb *pcb, int user_
         if (len<7) return 0;
         uint16_t x = (uint16_t)(buf[2] | (buf[3]<<8));
         uint16_t y = (uint16_t)(buf[4] | (buf[5]<<8));
-        if (x>HID_ABS_MAX) x=HID_ABS_MAX;
-        if (y>HID_ABS_MAX) y=HID_ABS_MAX;
-        hid_abs_report_t rep={.buttons=buf[1],.x=x,.y=y,.wheel=(int8_t)buf[6]};
-        hid_push_abs_report(&rep); return 7;
+        hid_push_abs_pointer(x, y, buf[1], (int8_t)buf[6]);
+        return 7;
 
     } else if (cmd==0xFF) {
         uint8_t pong[2]={0xFF,0x00};

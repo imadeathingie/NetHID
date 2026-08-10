@@ -149,12 +149,19 @@
     display: none; position: fixed; inset: 0;
     background: rgba(13,13,15,0.92); backdrop-filter: blur(6px);
     z-index: 100; align-items: center; justify-content: center;
+    padding: 16px; overflow-y: auto;
   }
   #lock-overlay.visible { display: flex; }
   .lock-card {
     background: var(--surface); border: 1px solid var(--key-border);
     border-radius: 14px; padding: 36px 32px; width: 300px;
     display: flex; flex-direction: column; gap: 16px; align-items: center;
+    /* Short enough today that it fits anywhere, clamped anyway because this is
+       the one screen you cannot get past if it renders off the edge. */
+    max-width: 100%; margin: auto;
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto; overscroll-behavior: contain;
   }
   .lock-title { font-size: 1rem; color: var(--accent); letter-spacing: 0.1em; }
   .lock-sub   { font-size: 0.75rem; color: var(--text-dim); text-align: center; }
@@ -435,16 +442,45 @@
   display:none; position:fixed; inset:0;
   background:rgba(13,13,15,0.92); backdrop-filter:blur(6px);
   z-index:100; align-items:center; justify-content:center;
+  /* The padding is not decoration: it guarantees a strip of overlay outside the
+     card on every screen, and tapping that is how this closes. */
+  padding:16px;
+  overflow-y:auto; -webkit-overflow-scrolling:touch;
 }
 #settings-overlay.visible { display:flex; }
 .settings-switch { display:flex; align-items:center; gap:8px; color:var(--text); font-size:0.85rem; cursor:pointer; }
 .settings-switch input { width:18px; height:18px; cursor:pointer; }
 .settings-card {
   background:var(--surface); border:1px solid var(--key-border);
-  border-radius:14px; padding:24px; width:320px; max-width:90vw;
+  /* No padding at the TOP: the sticky header supplies it instead. A sticky
+     `top:0` pins to the content box, so card padding above it stays part of the
+     scrolling area and text slides through the gap — which it visibly did. */
+  border-radius:14px; padding:0 24px 24px; width:320px; max-width:100%;
   display:flex; flex-direction:column; gap:14px;
+  /* Scroll inside the card once it outgrows the screen. Without a max-height it
+     simply overflowed the viewport, and `align-items:center` put half of that
+     overflow ABOVE the top of the screen where no amount of scrolling reaches
+     it — which is why the password fields were unreachable on a phone.
+     `margin:auto` centres like align-items does, but clamps to the start edge
+     instead of overflowing past it, so the fallback below can scroll. */
+  margin:auto;
+  max-height:calc(100vh - 32px);
+  max-height:calc(100dvh - 32px);   /* dvh excludes mobile browser chrome */
+  overflow-y:auto; -webkit-overflow-scrolling:touch;
+  overscroll-behavior:contain;      /* don't scroll the page behind it */
 }
-.settings-head { display:flex; align-items:center; justify-content:space-between; }
+.settings-head {
+  display:flex; align-items:center; justify-content:space-between;
+  /* Stays put while the card scrolls: the only ways out of this modal are ✕ and
+     the overlay strip, and a ✕ that scrolls off screen on a phone is a dead end
+     (Escape closes the keycode picker, not this). Bleeds into the card's own
+     padding so nothing shows through above or beside it. */
+  position:sticky; top:0; z-index:1;
+  /* Full-bleed sideways so scrolling content cannot appear beside it either,
+     and it carries the card's top padding as its own. */
+  margin:0 -24px; padding:24px 24px 10px;
+  background:var(--surface); border-radius:13px 13px 0 0;
+}
 .settings-row { display:flex; align-items:center; gap:10px; }
 .settings-label { font-size:0.85rem; color:var(--text); min-width:70px; }
 .settings-row select {
@@ -453,6 +489,20 @@
   font-size:0.9rem; padding:8px 10px;
 }
 .settings-hint { font-size:0.72rem; color:var(--text-dim); line-height:1.5; }
+.settings-sep { border-top:1px solid var(--key-border); margin:4px 0 2px; }
+.pw-state { font-size:0.72rem; color:var(--text-dim); }
+.pw-state.on { color:var(--accent2); }
+.pw-form { display:flex; flex-direction:column; gap:8px; }
+.pw-form input {
+  background:var(--panel); border:1px solid var(--key-border); border-radius:6px;
+  color:var(--text); font-family:var(--font); font-size:0.8rem; padding:7px 9px;
+}
+.pw-form input:focus { outline:none; border-color:var(--accent); }
+.pw-btns { display:flex; gap:8px; flex-wrap:wrap; }
+.pw-msg { font-size:0.72rem; line-height:1.5; display:none; }
+.pw-msg.err { color:#f87171; display:block; }
+.pw-msg.ok  { color:#4ade80; display:block; }
+.pw-msg.warn{ color:#fbbf24; display:block; }
 </style>
 </head>
 <body>
@@ -493,6 +543,31 @@
       </label>
     </div>
     <div class="settings-hint">When on, running a macro logs one line per step (with the key/combo resolved for the current host OS) instead of just a summary.</div>
+
+    <!-- Hidden until /api/password answers, so a firmware built without the
+         store shows no control rather than one that 404s. -->
+    <div id="pwWrap" hidden>
+      <div class="settings-sep"></div>
+      <div class="settings-row">
+        <div class="settings-label">Password</div>
+        <div class="pw-state" id="pwState">—</div>
+      </div>
+      <div class="pw-form">
+        <input type="password" id="pwCur" placeholder="Current password"
+               autocomplete="current-password" oninput="pwClearMsg()">
+        <input type="password" id="pwNew" placeholder="New password"
+               autocomplete="new-password" oninput="pwClearMsg()">
+        <input type="password" id="pwNew2" placeholder="Repeat new password"
+               autocomplete="new-password" oninput="pwClearMsg()">
+        <div class="pw-btns">
+          <button class="btn" id="pwSave" onclick="pwChange()">Change password</button>
+          <button class="btn km-sec" id="pwReset" onclick="pwRevert()"
+                  title="Back to the password compiled into this firmware">Revert to firmware password</button>
+        </div>
+        <div class="pw-msg" id="pwMsg"></div>
+      </div>
+      <div class="settings-hint" id="pwHint"></div>
+    </div>
   </div>
 </div>
 <!-- SVG sprite (place once near the top of the page) -->
@@ -1080,6 +1155,1843 @@
   <iframe class="irdb-frame" src="/learn" title="Learn remotes" loading="lazy"></iframe>
 </div>
 <!--@@ENDTAB@@-->
+<!--@@TAB keymap@@-->
+<div class="panel" id="panel-keymap" data-tabname="keymap" data-tablabel="KEYMAP">
+<style>
+  .km-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .km-board{font:600 12px/1 ui-monospace,monospace;opacity:.7;letter-spacing:.05em}
+  .km-sec{opacity:.75}
+  .km-flag{font:600 11px/1 ui-monospace,monospace;padding:3px 7px;border-radius:4px}
+  .km-flag.dirty{background:#7a4d00;color:#ffd08a}
+  .km-flag.clean{background:#14421f;color:#8ce4a4}
+  .km-layers{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .km-lbtn{padding:5px 11px;border-radius:5px;border:1px solid #3a3a44;background:#1c1c22;
+           color:#ccc;font:600 12px/1 ui-monospace,monospace;cursor:pointer}
+  .km-lbtn.on{background:#2f6fd0;border-color:#2f6fd0;color:#fff}
+  .km-lbtn.empty{opacity:.45}
+  .km-grid{display:grid;gap:5px;margin-bottom:10px;overflow-x:auto}
+  .km-phys{position:relative;margin:0 0 12px;overflow-x:auto}
+  .km-phys .km-key{position:absolute;margin:0;display:flex;flex-direction:column;
+                   align-items:center;justify-content:center;text-align:center}
+  .km-unplaced{margin-bottom:12px}
+  .km-mods{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+  .km-mlabel{font:600 10px/1 ui-monospace,monospace;opacity:.45;letter-spacing:.08em;
+             margin-right:2px}
+  .km-mbtn{padding:5px 10px;border-radius:5px;border:1px solid #3a3a44;background:#1c1c22;
+           color:#ccc;font:600 11px/1 ui-monospace,monospace;cursor:pointer;
+           display:flex;align-items:center;gap:6px}
+  .km-mbtn.on{background:#2f6fd0;border-color:#2f6fd0;color:#fff}
+  .km-dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .km-dot.up{background:#5ec97a}
+  .km-dot.down{background:#c95e5e}
+  .km-key.offmod{opacity:.18}
+  .km-mwarn{font:600 11px/1.5 ui-monospace,monospace;color:#e0a86a;margin-bottom:8px}
+  .km-encs{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:14px}
+  .km-enc{border:1px solid #2f2f38;border-radius:6px;background:#17171d;padding:9px 11px}
+  .km-enctitle{font:600 10px/1 ui-monospace,monospace;opacity:.5;letter-spacing:.08em;
+               margin-bottom:7px;display:flex;gap:6px;align-items:center}
+  .km-encrow{display:flex;gap:5px;align-items:center}
+  .km-encact{display:flex;flex-direction:column;align-items:center;gap:3px}
+  .km-encact .lbl{font:600 9px/1 ui-monospace,monospace;opacity:.45}
+  .km-encact .km-key{width:66px;min-height:38px}
+  .km-encsec{font:600 10px/1.6 ui-monospace,monospace;opacity:.5;letter-spacing:.08em;
+             margin-bottom:6px}
+  .mb-wrap{border-top:1px solid #2c2c34;margin-top:14px;padding-top:12px}
+  .mb-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+  .mb-title{font:600 12px/1 ui-monospace,monospace;letter-spacing:.05em;opacity:.8}
+  .mb-pool{font:600 11px/1 ui-monospace,monospace;opacity:.55}
+  .mb-slots{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}
+  .mb-slot{padding:5px 10px;border-radius:5px;border:1px solid #3a3a44;background:#1c1c22;
+           color:#bbb;font:600 11px/1 ui-monospace,monospace;cursor:pointer}
+  .mb-slot.on{background:#2f6fd0;border-color:#2f6fd0;color:#fff}
+  .mb-slot.filled{border-color:#4d7a52;color:#a8dcae}
+  .mb-slot.on.filled{background:#2f6fd0;border-color:#2f6fd0;color:#fff}
+  .ac-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:9px}
+  .ac-lbl{font:600 11px/1 ui-monospace,monospace;opacity:.6;min-width:74px}
+  .ac-key{padding:5px 12px;border-radius:5px;border:1px solid #4a3a5c;background:#20202a;
+          color:#d3b8ee;font:600 12px/1 ui-monospace,monospace;cursor:pointer}
+  .ac-key:hover{border-color:#2f6fd0}
+  .ac-num{width:88px}
+  .ac-trig{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+  .ac-trig label{font:11px/1 ui-monospace,monospace;opacity:.85;
+                 display:flex;gap:5px;align-items:center;cursor:pointer}
+  .ac-warn{font:11px/1.5 ui-monospace,monospace;color:#e0a34a}
+  .mb-steps{display:grid;gap:5px;margin-bottom:9px}
+  .mb-step{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px;
+           border:1px solid #2f2f38;border-radius:5px;background:#17171d}
+  .mb-step select,.mb-step input{padding:4px 6px;border-radius:4px;border:1px solid #3a3a44;
+           background:#0f0f14;color:#eee;font:400 12px/1 ui-monospace,monospace}
+  .mb-step input[type=text]{flex:1;min-width:130px}
+  .mb-n{font:600 11px/1 ui-monospace,monospace;opacity:.4;width:18px;flex:none}
+  .mb-mods{display:flex;gap:7px;font-size:10px;opacity:.85}
+  .mb-x{margin-left:auto;border:1px solid #3a3a44;background:#20202a;color:#c88;
+        border-radius:4px;width:24px;height:24px;cursor:pointer;flex:none;line-height:1}
+  .mb-mv{border:1px solid #3a3a44;background:#20202a;color:#aaa;border-radius:4px;
+         width:22px;height:24px;cursor:pointer;flex:none;font-size:10px;line-height:1}
+  .mb-add{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:9px}
+  .mb-empty{font-size:12px;opacity:.5;padding:8px 0}
+  .km-utitle{font:600 11px/1.4 ui-monospace,monospace;color:#e0a86a;margin-bottom:5px}
+  .km-ulist{display:flex;flex-wrap:wrap;gap:5px}
+  .km-ulist .km-key{width:74px}
+  .km-key{min-height:42px;padding:3px;border-radius:5px;border:1px solid #34343c;
+          background:#20202a;color:#e6e6ee;cursor:pointer;
+          font:600 11px/1.2 ui-monospace,monospace;word-break:break-all}
+  .km-key:hover{border-color:#2f6fd0}
+  .km-key .km-pos{display:block;font-weight:400;font-size:9px;opacity:.4}
+  .km-key.none{opacity:.32}
+  .km-key.trns{color:#8a8a99}
+  .km-hint{font-size:12px;opacity:.65;line-height:1.5;max-width:62em}
+  /* Visibility is a class, NOT the `hidden` attribute: an author rule of
+     display:flex outranks the user-agent's [hidden]{display:none}, so a
+     display-carrying class plus `hidden` leaves the dialog permanently on
+     screen. Learned the hard way. */
+  .km-picker{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;
+             align-items:center;justify-content:center;z-index:900;padding:14px}
+  .km-picker.on{display:flex}
+  .km-pbox{background:#16161c;border:1px solid #3a3a44;border-radius:9px;padding:14px;
+           width:min(620px,100%);max-height:86vh;overflow:auto;
+           font-family:ui-monospace,monospace}
+  .km-phead{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .km-ptitle{font:600 13px/1.3 ui-monospace,monospace;flex:1}
+  .km-x{border:1px solid #3a3a44;background:#20202a;color:#ccc;border-radius:5px;
+        width:28px;height:28px;font-size:15px;line-height:1;cursor:pointer;flex:none}
+  .km-x:hover{border-color:#2f6fd0;color:#fff}
+  .km-search{width:100%;padding:8px;margin-bottom:10px;border-radius:5px;
+             border:1px solid #3a3a44;background:#0f0f14;color:#eee;
+             font:400 13px/1 ui-monospace,monospace}
+  .km-bar .btn{padding:6px 12px;font-size:12px}
+  .km-list{max-height:34vh;overflow:auto}
+  .km-list{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:12px}
+  .km-glabel{width:100%;font:600 10px/1.6 ui-monospace,monospace;opacity:.5;
+             letter-spacing:.08em;margin-top:4px}
+  .km-opt.ms{border-color:#4a3a5c;color:#d3b8ee}
+  .km-opt.cc{border-color:#3a5c4a;color:#b8eec8}
+  .km-opt.ac{border-color:#5c4a3a;color:#eed8b8}
+  .km-note{font:11px/1.5 ui-monospace,monospace;color:#e0a34a}
+  .km-opt{padding:4px 8px;border-radius:4px;border:1px solid #34343c;background:#20202a;
+          color:#ddd;font:600 11px/1 ui-monospace,monospace;cursor:pointer}
+  .km-opt:hover{border-color:#2f6fd0}
+  .km-adv{border-top:1px solid #2c2c34;padding-top:10px;display:grid;gap:7px}
+  .km-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:12px}
+  .km-row select,.km-row input[type=number]{padding:5px;border-radius:4px;
+          border:1px solid #3a3a44;background:#0f0f14;color:#eee;font-size:12px}
+  .km-mods{display:flex;gap:9px;flex-wrap:wrap;font-size:11px}
+  .km-val{font:600 12px/1 ui-monospace,monospace;opacity:.7}
+</style>
+
+<div class="km-bar">
+  <span class="km-board" id="kmBoard">loading…</span>
+  <span class="km-flag clean" id="kmFlag">—</span>
+  <button class="btn" onclick="kmSave()">Save to flash</button>
+  <button class="btn km-sec" onclick="kmRevert()">Revert to compiled</button>
+  <button class="btn km-sec" id="kmViewBtn" onclick="kmToggleView()" hidden>Grid view</button>
+  <button class="btn km-sec" onclick="kmExport()">Export</button>
+  <button class="btn km-sec" onclick="document.getElementById('kmImportFile').click()">Import</button>
+  <input type="file" id="kmImportFile" accept="application/json,.json" style="display:none" onchange="kmImport(event)">
+</div>
+
+<div class="km-layers" id="kmLayerBtns"></div>
+<div class="km-mods" id="kmModBtns" hidden></div>
+<div class="km-mwarn" id="kmModWarn" hidden></div>
+<div class="km-phys" id="kmPhys" hidden></div>
+<div class="km-grid" id="kmGrid"></div>
+<div id="kmEncWrap" hidden>
+  <div class="km-encsec">ENCODERS</div>
+  <div class="km-encs" id="kmEncs"></div>
+</div>
+
+<div class="km-unplaced" id="kmUnplaced" hidden>
+  <div class="km-utitle" id="kmUtitle"></div>
+  <div class="km-ulist" id="kmUlist"></div>
+</div>
+
+<div class="km-hint">
+  Edits apply the moment you make them — the keyboard is already using them, nothing is flashed yet.
+  <b>Save to flash</b> makes them survive a power cycle; it parks the USB stack for about a tenth of a
+  second while the sector is erased, so the host will see the keyboard go quiet very briefly. Layers
+  above the ones your firmware was compiled with start out transparent, so you can add a layer without
+  masking the one underneath it.
+</div>
+
+<div class="mb-wrap" id="mbWrap" hidden>
+  <div class="mb-head">
+    <span class="mb-title">MACROS</span>
+    <span class="mb-pool" id="mbPool"></span>
+    <button class="btn" onclick="mbSave()">Save macros to flash</button>
+    <button class="btn km-sec" onclick="mbClear()">Delete all</button>
+  </div>
+  <div class="mb-slots" id="mbSlots"></div>
+  <div id="mbEditor"></div>
+  <div class="km-hint">
+    Steps run on the keyboard itself, so a macro key works with no browser open.
+    <b>tap</b> presses and releases; <b>hold</b> and <b>release</b> are the two halves of that,
+    for holding a modifier across several steps. Anything still held when the macro ends is
+    released for you. <b>text</b> goes through the same typer the web UI uses, which drives the
+    USB endpoint directly — so modifiers you are holding do not apply to it, and a physically
+    held key is let go for its duration. Assign a macro to a key with the
+    <b>KB_MACRO(n)</b> type in the key picker.
+  </div>
+</div>
+
+<div class="mb-wrap" id="acWrap" hidden>
+  <div class="mb-head">
+    <span class="mb-title">AUTOCLICK</span>
+    <span class="km-flag clean" id="acFlag">—</span>
+    <button class="btn" onclick="acSave()">Save slots to flash</button>
+    <button class="btn km-sec" onclick="acRevert()">Revert to compiled</button>
+  </div>
+  <div class="mb-slots" id="acSlots"></div>
+  <div id="acEditor"></div>
+  <div class="km-hint" id="acHint"></div>
+</div>
+
+<div class="km-picker" id="kmPicker" onclick="if(event.target===this)kmPickClose()">
+  <div class="km-pbox">
+    <div class="km-phead">
+      <div class="km-ptitle" id="kmPickTitle">key</div>
+      <button class="km-x" onclick="kmPickClose()" title="close (Esc)">&times;</button>
+    </div>
+    <input class="km-search" id="kmSearch" placeholder="search: a, f5, left, lsft, enter…" oninput="kmFilter()">
+    <div class="km-list" id="kmList"></div>
+    <div class="km-adv">
+      <div class="km-row">
+        <select id="kmAdvType" onchange="kmAdvSync()">
+          <option value="basic">plain keycode</option>
+          <option value="MOUSE">mouse key</option>
+          <option value="MEDIA">media / consumer key</option>
+          <option value="MO">MO — hold for layer</option>
+          <option value="TO">TO — switch to layer</option>
+          <option value="TG">TG — toggle layer</option>
+          <option value="DF">DF — set default layer</option>
+          <option value="OSL">OSL — one-shot layer</option>
+          <option value="LT">LT — tap key / hold layer</option>
+          <option value="MT">MT — tap key / hold mods</option>
+          <option value="OSM">OSM — one-shot mods</option>
+          <option value="MODS">mods + key (e.g. shift-4)</option>
+          <option value="MACRO">KB_MACRO(n)</option>
+          <option value="AUTOCLICK">autoclick slot</option>
+          <option value="CAPSWRD">caps word</option>
+          <option value="BOOT">QK_BOOT — bootloader</option>
+          <option value="TRNS">transparent</option>
+          <option value="NO">nothing</option>
+        </select>
+        <span id="kmAdvLayerWrap"><span id="kmAdvNumLbl">layer</span> <input type="number" id="kmAdvNum" min="0" max="15" value="1" style="width:64px" oninput="kmAdvSync()"></span>
+        <span id="kmAdvKcWrap">key <select id="kmAdvKc" onchange="kmAdvSync()"></select></span>
+        <span id="kmAdvMsWrap">action <select id="kmAdvMs" onchange="kmAdvSync()"></select></span>
+        <span id="kmAdvCcWrap">media <select id="kmAdvCc" onchange="kmAdvSync()"></select></span>
+      </div>
+      <div class="km-row" id="kmAdvModsWrap">
+        <span class="km-mods">
+          <label><input type="checkbox" class="kmMod" value="1" onchange="kmAdvSync()"> Ctrl</label>
+          <label><input type="checkbox" class="kmMod" value="2" onchange="kmAdvSync()"> Shift</label>
+          <label><input type="checkbox" class="kmMod" value="4" onchange="kmAdvSync()"> Alt</label>
+          <label><input type="checkbox" class="kmMod" value="8" onchange="kmAdvSync()"> GUI</label>
+          <label><input type="checkbox" id="kmModRight" onchange="kmAdvSync()"> right-hand</label>
+        </span>
+      </div>
+      <div class="km-row" id="kmAdvNoteWrap"><span class="km-note" id="kmAdvNote"></span></div>
+      <div class="km-row">
+        <span class="km-val" id="kmAdvVal"></span>
+        <button class="btn" onclick="kmAdvApply()">Set</button>
+        <button class="btn km-sec" onclick="kmPickClose()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Keycode space — mirrors include/kb/keycodes.h ────────────────────────────
+// Basic keycodes are USB HID usage IDs. The quantum encodings below must stay
+// in step with that header; they are the wire format of /api/keymap.
+const KMQ = { MODS:0x0100, RMOD:0x1000, MOD_TAP:0x2000, LAYER_TAP:0x4000,
+              MO:0x5100, DF:0x5200, TG:0x5300, OSL:0x5400, TO:0x5500,
+              OSM:0x5600, CAPSWRD:0x5700, BOOT:0x5800, MOUSE:0x5900,
+              CONSUMER:0x5A00, AUTOCLICK:0x5B00, MACRO:0x7E00 };
+
+// Mouse keys. Order matches include/kb/keycodes.h; the offsets are the wire
+// format, so keep the two in step.
+// Consumer Control. Index into the table in src/kb/features/consumer.cpp — keep
+// the order in step with the KC_* list in kb/keycodes.h.
+const CC = {};
+['KC_MUTE','KC_VOLU','KC_VOLD','KC_MNXT','KC_MPRV','KC_MSTP','KC_MPLY',
+ 'KC_MFFD','KC_MRWD','KC_EJCT','KC_BRIU','KC_BRID','KC_WSCH','KC_WHOM',
+ 'KC_WBAK','KC_WFWD','KC_WREF','KC_CALC','KC_MYCM','KC_MAIL']
+  .forEach((n,i) => CC[n.replace('KC_','')] = 0x5A00 | i);
+const CC_NAME = {};
+Object.keys(CC).forEach(n => CC_NAME[CC[n]] = n);
+
+const MS = {};
+['MS_UP','MS_DOWN','MS_LEFT','MS_RGHT','MS_WHLU','MS_WHLD','MS_WHLL','MS_WHLR',
+ 'MS_BTN1','MS_BTN2','MS_BTN3','MS_BTN4','MS_BTN5','MS_ACL0','MS_ACL1','MS_ACL2']
+  .forEach((n,i) => MS[n] = KMQ.MOUSE | i);
+const MS_NAME = {};
+Object.keys(MS).forEach(n => MS_NAME[MS[n]] = n);
+
+const KC = { NO:0x00, TRNS:0x01 };
+'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').forEach((ch,i) => KC[ch] = 0x04+i);
+'1234567890'.split('').forEach((ch,i) => KC[ch] = 0x1E+i);
+for (let i=1;i<=12;i++) KC['F'+i] = 0x39+i;
+for (let i=13;i<=24;i++) KC['F'+i] = 0x68+i-13;
+Object.assign(KC, {
+  ENT:0x28, ESC:0x29, BSPC:0x2A, TAB:0x2B, SPC:0x2C, MINS:0x2D, EQL:0x2E,
+  LBRC:0x2F, RBRC:0x30, BSLS:0x31, NUHS:0x32, SCLN:0x33, QUOT:0x34, GRV:0x35,
+  COMM:0x36, DOT:0x37, SLSH:0x38, CAPS:0x39,
+  PSCR:0x46, SCRL:0x47, PAUS:0x48, INS:0x49, HOME:0x4A, PGUP:0x4B, DEL:0x4C,
+  END:0x4D, PGDN:0x4E, RGHT:0x4F, LEFT:0x50, DOWN:0x51, UP:0x52, NUM:0x53,
+  PSLS:0x54, PAST:0x55, PMNS:0x56, PPLS:0x57, PENT:0x58, PDOT:0x63, APP:0x65,
+  LCTL:0xE0, LSFT:0xE1, LALT:0xE2, LGUI:0xE3,
+  RCTL:0xE4, RSFT:0xE5, RALT:0xE6, RGUI:0xE7
+});
+for (let i=1;i<=9;i++) KC['P'+i] = 0x58+i;
+KC.P0 = 0x62;
+
+// The rest of the Keyboard/Keypad usage page, so every key on a full-size
+// board can actually be assigned. Names match include/kb/keycodes.h — the
+// export writes "KC_" + the name straight into keymap.cpp, so a name here that
+// the firmware header does not define is a keymap that exports and then fails
+// to compile. tools/check/check_keycode_tables.py holds the two in step.
+Object.assign(KC, {
+  PEQL:0x67, PCMM:0x85,          // keypad = and , (JIS / Brazilian pads)
+  NUBS:0x64,                     // ISO \| , the extra key by left Shift
+  KB_POWER:0x66,
+  // Sun/Unix editing keys. X11 and macOS act on most of these; Windows is
+  // patchier. Present on some full-size boards, so they are mappable.
+  EXEC:0x74, HELP:0x75, MENU:0x76, SLCT:0x77, STOP:0x78, AGIN:0x79,
+  UNDO:0x7A, CUT:0x7B, COPY:0x7C, PSTE:0x7D, FIND:0x7E,
+  // Volume on the KEYBOARD page — NOT the media keys. KC_MUTE/VOLU/VOLD in the
+  // MEDIA group are Consumer Control usages and are what a modern host acts on.
+  KB_MUTE:0x7F, KB_VOLU:0x80, KB_VOLD:0x81,
+  // JIS and Hangul boards carry these as physical keys.
+  RO:0x87, KANA:0x88, JYEN:0x89, HENK:0x8A, MHEN:0x8B, HAEN:0x90, HANJ:0x91,
+});
+
+// Which keys the picker shows under which heading. Names only — the values all
+// live in KC — so a key can be regrouped without any risk of changing what it
+// sends. Anything in KC and not listed here falls into KEYBOARD, so a keycode
+// added later is never silently unreachable.
+const KC_GROUPS = [
+  ['KEYPAD', 'keypad numpad numeric number pad',
+   ['NUM','PSLS','PAST','PMNS','PPLS','PENT','PEQL','PCMM','PDOT',
+    'P0','P1','P2','P3','P4','P5','P6','P7','P8','P9']],
+  ['NAVIGATION', 'arrow cursor navigation home end page insert delete',
+   ['UP','DOWN','LEFT','RGHT','HOME','END','PGUP','PGDN','INS','DEL',
+    'PSCR','SCRL','PAUS']],
+  ['MODIFIERS', 'modifier control ctrl shift alt option gui win cmd command super meta',
+   ['LCTL','LSFT','LALT','LGUI','RCTL','RSFT','RALT','RGUI']],
+  ['EDIT & SYSTEM', 'undo cut copy paste find again select stop execute help menu power volume mute',
+   ['UNDO','CUT','COPY','PSTE','FIND','AGIN','SLCT','STOP','EXEC','HELP',
+    'MENU','APP','KB_POWER','KB_MUTE','KB_VOLU','KB_VOLD']],
+  ['INTERNATIONAL', 'international iso jis japanese korean hangul hanja yen kana henkan muhenkan non-us',
+   ['NUHS','NUBS','RO','KANA','JYEN','HENK','MHEN','HAEN','HANJ']],
+];
+const KC_NAME = {};
+Object.keys(KC).forEach(n => { if (KC_NAME[KC[n]] === undefined) KC_NAME[KC[n]] = n; });
+
+const MODNAME = ['Ctl','Sft','Alt','Gui'];
+function kmModsLabel(bits, right) {
+  let out = [];
+  for (let b=0;b<4;b++) if (bits & (1<<b)) out.push((right?'R':'')+MODNAME[b]);
+  return out.join('+');
+}
+
+// Render a keycode as something a human can read on a 42px key.
+function kmLabel(kc) {
+  if (kc === KC.NO)   return '·';
+  if (kc === KC.TRNS) return '▽';
+  if (kc <= 0xFF)     return KC_NAME[kc] || ('0x'+kc.toString(16));
+  const hi = kc & 0xFF00, lo = kc & 0xFF;
+  if (kc === KMQ.CAPSWRD) return 'CAPSWD';
+  if (kc === KMQ.BOOT)    return 'BOOT';
+  if (hi === KMQ.MOUSE)   return (MS_NAME[kc] || ('MS?' + lo)).replace('MS_','');
+  if (hi === 0x5A00)      return CC_NAME[kc] || ('CC?' + lo);
+  if (hi === KMQ.AUTOCLICK) return 'AUTO' + lo;
+  if (hi === KMQ.MO)  return 'MO'+lo;
+  if (hi === KMQ.DF)  return 'DF'+lo;
+  if (hi === KMQ.TG)  return 'TG'+lo;
+  if (hi === KMQ.OSL) return 'OSL'+lo;
+  if (hi === KMQ.TO)  return 'TO'+lo;
+  if (hi === KMQ.OSM) return 'OSM '+kmModsLabel(lo & 0x0F, false) + (lo & 0xF0 ? kmModsLabel(lo>>4, true) : '');
+  if ((kc & 0xFF00) === KMQ.MACRO) return 'M'+lo;
+  if (kc >= KMQ.LAYER_TAP && kc <= 0x4FFF) return 'LT'+((kc>>8)&0xF)+'\n'+(KC_NAME[lo]||lo);
+  if (kc >= KMQ.MOD_TAP && kc <= 0x3FFF)
+    return kmModsLabel((kc>>8)&0xF, !!(kc & KMQ.RMOD))+'\n'+(KC_NAME[lo]||lo);
+  if (kc >= KMQ.MODS && kc <= 0x1FFF)
+    return kmModsLabel((kc>>8)&0xF, !!(kc & KMQ.RMOD))+'-'+(KC_NAME[lo]||lo);
+  return '0x'+kc.toString(16);
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+let kmInfo = null;         // {rows, cols, layers, compiled_layers, board}
+let kmLayers = [];         // kmLayers[layer] = flat array of rows*cols keycodes
+let kmCur = 0;
+let kmSel = null;          // {row, col} being edited
+let kmLoaded = false;
+let kmGeom = null;         // physical layout from the board, or null
+let kmModules = null;      // module table, or null on a single-board keyboard
+let kmModSel = -1;         // -1 = all modules
+let kmEnc = [];            // kmEnc[layer] = [[ccw, cw, press], ...]
+let kmEncSel = null;       // {index, action} while the picker is open
+let kmUnit = 100;
+let kmPhysView = false;
+
+async function kmGet(path) {
+  const r = await fetch(path, { credentials:'same-origin', cache:'no-store' });
+  if (r.status === 401) { showLockOverlay(); return null; }
+  return await r.json();
+}
+
+async function kmLoad(force) {
+  if (kmLoaded && !force) return;
+  const info = await kmGet('/api/keymap/info');
+  if (!info || !info.ok) { document.getElementById('kmBoard').textContent = 'keymap API unavailable'; return; }
+  const prevBoard = kmInfo && kmInfo.board;
+  kmInfo = info;
+  kmModules = (info.modules && info.modules.length > 1) ? info.modules : null;
+
+  // Everything below describes THIS board. Carried over from the last one it is
+  // not merely stale, it is wrong: a module selection naming a module that no
+  // longer exists filters every row out and leaves an empty editor, and a
+  // geometry from the previous board draws keys that are not there.
+  if (prevBoard !== info.board) {
+    kmModSel = -1;
+    kmGeom = null;
+    kmPhysView = false;
+    kmCur = 0;
+    document.getElementById('kmViewBtn').hidden = true;
+  }
+  // Even on the same board the module set can change under us — a module that
+  // has been unplugged is still listed, but one removed from SPLIT_MODULES is
+  // not. Drop a selection that no longer names anything.
+  if (kmModSel >= 0 && !(kmModules || []).some(m => m.id === kmModSel))
+    kmModSel = -1;
+
+  if (kmCur >= info.layers) kmCur = 0;
+  document.getElementById('kmBoard').textContent =
+    info.board + '  ' + info.rows + '×' + info.cols + '  ' + info.layers + ' layers';
+  // Physical geometry is optional — boards that define no LAYOUT_GEOMETRY
+  // return an empty list and we stay on the grid.
+  const lay = await kmGet('/api/keymap/layout');
+  if (lay && lay.ok && lay.keys && lay.keys.length) {
+    kmUnit = lay.unit || 100;
+    kmGeom = lay.keys.map(a => ({
+      row:a[0], col:a[1], x:a[2], y:a[3],
+      w:a.length > 4 ? a[4] : kmUnit, h:a.length > 5 ? a[5] : kmUnit,
+      rot:a.length > 6 ? a[6] : 0, rx:a.length > 7 ? a[7] : 0, ry:a.length > 8 ? a[8] : 0
+    }));
+    kmPhysView = true;
+    document.getElementById('kmViewBtn').hidden = false;
+  }
+  // Encoder maps, one fetch per layer alongside the keymap. Skipped entirely on
+  // a board with no encoders, so nothing changes for those.
+  kmEnc = [];
+  kmEncSel = null;
+  if (info.encoders > 0) {
+    for (let l = 0; l < info.layers; l++) {
+      const j = await kmGet('/api/keymap/encoders/' + l);
+      kmEnc[l] = (j && j.ok) ? j.encoders : [];
+    }
+  }
+
+  kmLayers = [];
+  for (let l = 0; l < info.layers; l++) {
+    const j = await kmGet('/api/keymap/' + l);
+    kmLayers[l] = (j && j.ok) ? j.keys : new Array(info.rows*info.cols).fill(KC.TRNS);
+  }
+  kmLoaded = true;
+  kmFlag(info.dirty);
+  kmRenderLayers();
+  kmRenderModules();
+  kmRender();
+  await mbLoad();
+  await acLoad();
+}
+
+function kmFlag(dirty) {
+  const e = document.getElementById('kmFlag');
+  e.className = 'km-flag ' + (dirty ? 'dirty' : 'clean');
+  e.textContent = dirty ? 'unsaved' : 'saved';
+}
+
+function kmLayerEmpty(l) {
+  return kmLayers[l].every(k => k === KC.TRNS || k === KC.NO);
+}
+
+function kmRenderLayers() {
+  const wrap = document.getElementById('kmLayerBtns');
+  wrap.innerHTML = '';
+  for (let l = 0; l < kmInfo.layers; l++) {
+    const b = document.createElement('button');
+    b.className = 'km-lbtn' + (l === kmCur ? ' on' : '') + (kmLayerEmpty(l) ? ' empty' : '');
+    b.textContent = 'L' + l + (l >= kmInfo.compiled_layers ? '+' : '');
+    b.title = l >= kmInfo.compiled_layers ? 'beyond the compiled keymap' : '';
+    b.onclick = () => { kmCur = l; kmRenderLayers(); kmRender(); };
+    wrap.appendChild(b);
+  }
+}
+
+// One key button, used by both views.
+function kmKeyEl(r, c) {
+  const kc = kmLayers[kmCur][r*kmInfo.cols + c];
+  const b = document.createElement('button');
+  b.className = 'km-key' + (kc === KC.NO ? ' none' : kc === KC.TRNS ? ' trns' : '');
+  b.innerHTML = '<span class="km-pos">r' + r + 'c' + c + '</span>' +
+                kmLabel(kc).replace('\n','<br>');
+  b.onclick = () => {
+    if (!kmRowInSelection(r)) {
+      const m = kmModuleOfRow(r);
+      if (m) { kmModSel = m.id; kmRenderModules(); kmRender(); return; }
+    }
+    kmPickOpen(r, c);
+  };
+  return b;
+}
+
+// Which module owns a matrix row. Null when the board is not modular.
+function kmModuleOfRow(r) {
+  if (!kmModules) return null;
+  for (const m of kmModules)
+    if (r >= m.row_offset && r < m.row_offset + m.rows) return m;
+  return null;
+}
+
+function kmRowInSelection(r) {
+  if (kmModSel < 0 || !kmModules) return true;
+  const m = kmModuleOfRow(r);
+  return m ? m.id === kmModSel : false;
+}
+
+function kmRenderModules() {
+  const wrap = document.getElementById('kmModBtns');
+  const warn = document.getElementById('kmModWarn');
+  // Clear before deciding to hide. Hiding a container leaves its children in
+  // the DOM, so a board with no modules kept the previous board's chips — and
+  // the moment a board with modules came back, whichever list happened to be
+  // there was shown again.
+  wrap.innerHTML = '';
+  if (!kmModules) { wrap.hidden = true; warn.hidden = true; return; }
+  wrap.hidden = false;
+  wrap.innerHTML = '';
+
+  const label = document.createElement('span');
+  label.className = 'km-mlabel'; label.textContent = 'MODULE';
+  wrap.appendChild(label);
+
+  const mk = (id, text, online, title) => {
+    const b = document.createElement('button');
+    b.className = 'km-mbtn' + (kmModSel === id ? ' on' : '');
+    if (online !== null) {
+      const d = document.createElement('span');
+      d.className = 'km-dot ' + (online ? 'up' : 'down');
+      b.appendChild(d);
+    }
+    b.appendChild(document.createTextNode(text));
+    if (title) b.title = title;
+    b.onclick = () => { kmModSel = id; kmRenderModules(); kmRender(); };
+    wrap.appendChild(b);
+  };
+
+  mk(-1, 'All', null, 'Show every module at once');
+  kmModules.forEach(m => {
+    mk(m.id,
+       'M' + m.id + (m.primary ? ' (this)' : '') +
+       '  ' + m.rows + '\u00D7' + m.cols +
+       (m.encoders ? '  +' + m.encoders + '\u21BB' : ''),
+       m.primary ? true : m.online,
+       'rows ' + m.row_offset + '\u2013' + (m.row_offset + m.rows - 1));
+  });
+
+  // The most useful thing this view can tell you: the module you are editing is
+  // not currently answering, so nothing you change here will be visible on it
+  // until the cable is back in.
+  const sel = kmModules.find(m => m.id === kmModSel);
+  const offline = kmModules.filter(m => !m.primary && !m.online);
+  if (sel && !sel.primary && !sel.online) {
+    warn.hidden = false;
+    warn.textContent = 'Module ' + sel.id + ' is not answering. Edits are saved '
+                     + 'to the keymap, but that module is not currently attached.';
+  } else if (kmModSel < 0 && offline.length) {
+    warn.hidden = false;
+    warn.textContent = offline.length + ' module(s) not answering: '
+                     + offline.map(m => 'M' + m.id).join(', ');
+  } else {
+    warn.hidden = true;
+  }
+}
+
+function kmRender() {
+  const usedPhys = kmPhysView && kmGeom;
+  document.getElementById('kmPhys').hidden = !usedPhys;
+  document.getElementById('kmGrid').hidden = usedPhys;
+  document.getElementById('kmViewBtn').textContent = usedPhys ? 'Grid view' : 'Layout view';
+  if (usedPhys) kmRenderPhys(); else kmRenderGrid();
+  kmRenderEncoders();
+  kmRenderUnplaced();
+}
+
+// Encoders are not matrix positions and have no place in the grid, so they get
+// their own strip: one card per knob, three actions each, laid out the way a
+// knob works — turn left, press, turn right.
+function kmRenderEncoders() {
+  const wrap = document.getElementById('kmEncWrap');
+  const host = document.getElementById('kmEncs');
+  const n = kmInfo.encoders | 0;
+  host.innerHTML = '';                 // clear first; see kmRenderModules()
+  if (!n || !kmEnc[kmCur]) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+
+  const ACTIONS = [[0,'CCW','\u21BA'], [2,'PRESS','\u25CF'], [1,'CW','\u21BB']];
+
+  for (let e = 0; e < n; e++) {
+    const card = document.createElement('div');
+    card.className = 'km-enc';
+
+    const title = document.createElement('div');
+    title.className = 'km-enctitle';
+    title.textContent = 'ENCODER ' + e;
+    // On a modular board, say which module a knob is on — otherwise two
+    // identical cards give no clue which physical device you are editing.
+    if (kmModules) {
+      let base = 0, owner = null;
+      for (const m of kmModules) {
+        if (e >= base && e < base + m.encoders) { owner = m; break; }
+        base += m.encoders;
+      }
+      if (owner) {
+        const tag = document.createElement('span');
+        tag.style.cssText = 'opacity:.8';
+        tag.textContent = '\u00B7 M' + owner.id + (owner.primary ? ' (this)' : '');
+        title.appendChild(tag);
+      }
+    }
+    card.appendChild(title);
+
+    const row = document.createElement('div');
+    row.className = 'km-encrow';
+    ACTIONS.forEach(([act, label, glyph]) => {
+      const cell = document.createElement('div');
+      cell.className = 'km-encact';
+
+      const lbl = document.createElement('span');
+      lbl.className = 'lbl';
+      lbl.textContent = glyph + ' ' + label;
+      cell.appendChild(lbl);
+
+      const kc = (kmEnc[kmCur][e] || [0,0,0])[act];
+      const b = document.createElement('button');
+      b.className = 'km-key' + (kc === KC.NO ? ' none' : kc === KC.TRNS ? ' trns' : '');
+      b.innerHTML = kmLabel(kc).replace('\n','<br>');
+      b.title = label + ' on encoder ' + e;
+      b.onclick = () => kmEncPickOpen(e, act, label);
+      cell.appendChild(b);
+
+      row.appendChild(cell);
+    });
+    card.appendChild(row);
+    host.appendChild(card);
+  }
+}
+
+function kmEncPickOpen(index, action, label) {
+  if (!kmInfo) return;
+  kmEncSel = { index, action };
+  kmSel = null;                    // this picker edits an encoder, not a key
+  document.getElementById('kmPickTitle').textContent =
+    'layer ' + kmCur + '  \u00B7  encoder ' + index + ' ' + label +
+    '  \u00B7  currently ' + kmLabel((kmEnc[kmCur][index] || [0,0,0])[action]).replace('\n',' ');
+  document.getElementById('kmSearch').value = '';
+  kmBuildList();
+  kmBuildKcSelect();
+  kmAdvSync();
+  document.getElementById('kmPicker').classList.add('on');
+  document.getElementById('kmSearch').focus();
+}
+
+async function kmEncApply(kc) {
+  const { index, action } = kmEncSel;
+  const prev = kmEnc[kmCur][index][action];
+  kmEnc[kmCur][index][action] = kc;
+  kmPickClose();
+  kmRenderEncoders();
+  const j = await api('/api/keymap/encoders',
+                      { layer: kmCur, index, action, kc }, { quiet:true });
+  if (!j) { kmEnc[kmCur][index][action] = prev; kmRenderEncoders(); return; }
+  kmFlag(true);
+}
+
+function kmToggleView() { kmPhysView = !kmPhysView; kmRender(); }
+
+function kmRenderGrid() {
+  const g = document.getElementById('kmGrid');
+  g.style.gridTemplateColumns = 'repeat(' + kmInfo.cols + ', minmax(58px,1fr))';
+  g.innerHTML = '';
+  for (let r = 0; r < kmInfo.rows; r++) {
+    // Rows of other modules are omitted rather than dimmed here: the grid has
+    // no spatial meaning to preserve, so showing them would only be noise.
+    if (!kmRowInSelection(r)) continue;
+    for (let c = 0; c < kmInfo.cols; c++) {
+      // A module narrower than the board leaves its high columns unused.
+      const m = kmModuleOfRow(r);
+      if (m && c >= m.cols) { g.appendChild(document.createElement('span')); continue; }
+      g.appendChild(kmKeyEl(r, c));
+    }
+  }
+}
+
+// Absolute placement from the board's geometry. Key size is derived from the
+// container width so a wide board shrinks to fit rather than scrolling.
+function kmRenderPhys() {
+  const g = document.getElementById('kmPhys');
+  let maxX = 0, maxY = 0;
+  kmGeom.forEach(k => { maxX = Math.max(maxX, k.x+k.w); maxY = Math.max(maxY, k.y+k.h); });
+  const avail = (g.clientWidth || g.parentElement.clientWidth || 900) - 4;
+  const U = Math.max(30, Math.min(56, Math.floor(avail / (maxX / kmUnit))));
+  const px = v => (v / kmUnit) * U;
+
+  g.innerHTML = '';
+  g.style.height = px(maxY) + 'px';
+  kmGeom.forEach(k => {
+    if (k.row >= kmInfo.rows || k.col >= kmInfo.cols) return;   // stale geometry
+    const b = kmKeyEl(k.row, k.col);
+    // Dimmed, not removed: the physical view exists to show where keys ARE, and
+    // deleting half the board would make the remaining half unrecognisable.
+    if (!kmRowInSelection(k.row)) b.classList.add('offmod');
+    b.style.left   = px(k.x) + 'px';
+    b.style.top    = px(k.y) + 'px';
+    b.style.width  = (px(k.w) - 4) + 'px';
+    b.style.height = (px(k.h) - 4) + 'px';
+    b.style.minHeight = '0';
+    if (k.rot) {
+      b.style.transformOrigin = px(k.rx - k.x) + 'px ' + px(k.ry - k.y) + 'px';
+      b.style.transform = 'rotate(' + k.rot + 'deg)';
+    }
+    g.appendChild(b);
+  });
+}
+
+// Any wired position the geometry does not place. Without this, a key missing
+// from LAYOUT_GEOMETRY would be silently uneditable in layout view — which is
+// exactly the position you most need to reach while getting the geometry right.
+function kmRenderUnplaced() {
+  const wrap = document.getElementById('kmUnplaced');
+  if (!kmPhysView || !kmGeom) { wrap.hidden = true; return; }
+  const placed = new Set(kmGeom.map(k => k.row + ',' + k.col));
+  const missing = [];
+  for (let r = 0; r < kmInfo.rows; r++)
+    for (let c = 0; c < kmInfo.cols; c++) {
+      if (placed.has(r + ',' + c)) continue;
+      if (!kmRowInSelection(r)) continue;
+      if (kmLayers[kmCur][r*kmInfo.cols + c] === KC.NO) continue;   // genuinely unused
+      missing.push([r, c]);
+    }
+  wrap.hidden = missing.length === 0;
+  if (!missing.length) return;
+  document.getElementById('kmUtitle').textContent =
+    missing.length + ' position(s) not in this board\'s LAYOUT_GEOMETRY';
+  const list = document.getElementById('kmUlist');
+  list.innerHTML = '';
+  missing.forEach(([r, c]) => list.appendChild(kmKeyEl(r, c)));
+}
+
+// ── Picker ──────────────────────────────────────────────────────────────────
+function kmPickOpen(r, c) {
+  if (!kmInfo) return;
+  kmEncSel = null;                 // this picker edits a key, not an encoder
+  kmSel = { row:r, col:c };
+  document.getElementById('kmPickTitle').textContent =
+    'layer ' + kmCur + '  ·  r' + r + ' c' + c + '  ·  currently ' +
+    kmLabel(kmLayers[kmCur][r*kmInfo.cols+c]).replace('\n',' ');
+  document.getElementById('kmSearch').value = '';
+  kmBuildList();
+  kmBuildKcSelect();
+  kmAdvSync();
+  document.getElementById('kmPicker').classList.add('on');
+  document.getElementById('kmSearch').focus();
+}
+function kmPickClose() {
+  document.getElementById('kmPicker').classList.remove('on');
+  kmSel = null;
+  kmEncSel = null;
+  // Cleared here too, or dismissing the picker with Esc leaves the autoclick
+  // target armed and the NEXT key you edit silently retargets a slot instead.
+  acSel = null;
+}
+function kmPickIsOpen() {
+  return document.getElementById('kmPicker').classList.contains('on');
+}
+
+// What the running firmware was compiled with. An older build sends no
+// `features` object at all, and a missing field is ignorance rather than a
+// "no" — so assume present and let the user try, instead of hiding options
+// that would have worked.
+function kmFeat(name) {
+  const f = kmInfo && kmInfo.features;
+  return (!f || f[name] === undefined) ? true : !!f[name];
+}
+
+// Autoclick is a COUNT, not a flag: AUTOCLK(n) selects a slot the board
+// declared, so slot 7 on a 3-slot board is as dead as the feature being off.
+// 16 is the encoding's own limit, used when the firmware does not say.
+function kmAutoclickSlots() {
+  const f = kmInfo && kmInfo.features;
+  return (!f || f.autoclick === undefined) ? 16 : (f.autoclick | 0);
+}
+
+function kmBuildList() {
+  const list = document.getElementById('kmList');
+  list.innerHTML = '';
+  const group = (label, table, cls, keywords) => {
+    if (!Object.keys(table).length) return;
+    const h = document.createElement('div');
+    h.className = 'km-glabel'; h.textContent = label; h.dataset.group = '1';
+    list.appendChild(h);
+    Object.keys(table).forEach(n => {
+      const b = document.createElement('button');
+      b.className = 'km-opt' + (cls ? ' ' + cls : '');
+      b.textContent = n;
+      // Searchable by the words someone would actually type. "autoclick" and
+      // "click" find AUTO0 even though the label says neither.
+      b.dataset.name = (n + ' ' + (keywords || '')).toLowerCase();
+      b.onclick = () => kmApply(table[n]);
+      list.appendChild(b);
+    });
+  };
+
+  // Autoclick was reachable only from the advanced dropdown, so searching the
+  // picker for it found nothing and it looked like the feature did not exist.
+  const AC = {};
+  for (let i = 0; i < kmAutoclickSlots(); i++) AC['AUTO' + i] = KMQ.AUTOCLICK | i;
+
+  // KEYBOARD is whatever no other group claimed, so a keycode added to KC and
+  // forgotten in KC_GROUPS still shows up somewhere rather than becoming
+  // unreachable — the failure this picker already had once, with autoclick.
+  const claimed = new Set();
+  KC_GROUPS.forEach(g => g[2].forEach(n => claimed.add(n)));
+  const main = {};
+  Object.keys(KC).forEach(n => { if (!claimed.has(n)) main[n] = KC[n]; });
+  group('KEYBOARD', main, '', 'letter digit punctuation function');
+  KC_GROUPS.forEach(g => {
+    const t = {};
+    g[2].forEach(n => { if (KC[n] !== undefined) t[n] = KC[n]; });
+    group(g[0], t, '', g[1]);
+  });
+
+  if (kmFeat('mousekeys')) group('MOUSE', MS, 'ms', 'mouse pointer cursor');
+  if (kmFeat('consumer'))  group('MEDIA', CC, 'cc', 'media consumer volume');
+  group('AUTOCLICK', AC, 'ac', 'autoclick auto click repeat turbo');
+}
+function kmFilter() {
+  const q = document.getElementById('kmSearch').value.toLowerCase();
+  document.querySelectorAll('#kmList .km-opt').forEach(b => {
+    b.style.display = b.dataset.name.includes(q) ? '' : 'none';
+  });
+  // Hide a group heading whose whole group filtered out.
+  document.querySelectorAll('#kmList .km-glabel').forEach(h => {
+    let any = false;
+    for (let e = h.nextElementSibling; e && !e.dataset.group; e = e.nextElementSibling)
+      if (e.style.display !== 'none') { any = true; break; }
+    h.style.display = any ? '' : 'none';
+  });
+}
+function kmBuildKcSelect() {
+  const fill = (id, table, dflt) => {
+    const sel = document.getElementById(id);
+    if (sel.options.length) return;
+    Object.keys(table).forEach(n => {
+      const o = document.createElement('option');
+      o.value = table[n]; o.textContent = n;
+      sel.appendChild(o);
+    });
+    sel.value = dflt;
+  };
+  fill('kmAdvKc', KC, KC.A);
+  fill('kmAdvMs', MS, MS.MS_UP);
+  fill('kmAdvCc', CC, CC.MUTE);
+}
+
+function kmAdvBits() {
+  let bits = 0;
+  document.querySelectorAll('.kmMod').forEach(c => { if (c.checked) bits |= parseInt(c.value); });
+  return bits;
+}
+function kmAdvValue() {
+  const t = document.getElementById('kmAdvType').value;
+  const l = parseInt(document.getElementById('kmAdvNum').value) & 0xFF;
+  const k = parseInt(document.getElementById('kmAdvKc').value) & 0xFF;
+  const ms = parseInt(document.getElementById('kmAdvMs').value);
+  const cc = parseInt(document.getElementById('kmAdvCc').value);
+  const bits = kmAdvBits();
+  const right = document.getElementById('kmModRight').checked;
+  const packed = (bits << 8) | (right ? KMQ.RMOD : 0);
+  switch (t) {
+    case 'basic':   return k;
+    case 'MO':      return KMQ.MO  | l;
+    case 'TO':      return KMQ.TO  | l;
+    case 'TG':      return KMQ.TG  | l;
+    case 'DF':      return KMQ.DF  | l;
+    case 'OSL':     return KMQ.OSL | l;
+    case 'LT':      return KMQ.LAYER_TAP | ((l & 0xF) << 8) | k;
+    case 'MT':      return KMQ.MOD_TAP | packed | k;
+    case 'MODS':    return KMQ.MODS | packed | k;
+    case 'OSM':     return KMQ.OSM | (right ? (bits << 4) : bits);
+    case 'MOUSE':   return ms;
+    case 'MEDIA':   return cc;
+    case 'MACRO':     return KMQ.MACRO | l;
+    case 'AUTOCLICK': return KMQ.AUTOCLICK | (l & 0x0F);
+    case 'CAPSWRD': return KMQ.CAPSWRD;
+    case 'BOOT':    return KMQ.BOOT;
+    case 'TRNS':    return KC.TRNS;
+    default:        return KC.NO;
+  }
+}
+function kmAdvSync() {
+  const t = document.getElementById('kmAdvType').value;
+  const needsNum   = ['MO','TO','TG','DF','OSL','LT','MACRO','AUTOCLICK'].includes(t);
+  const needsKc    = ['basic','LT','MT','MODS'].includes(t);
+  const needsMods  = ['MT','MODS','OSM'].includes(t);
+  document.getElementById('kmAdvLayerWrap').style.display = needsNum ? '' : 'none';
+  document.getElementById('kmAdvKcWrap').style.display    = needsKc ? '' : 'none';
+  document.getElementById('kmAdvMsWrap').style.display    = t === 'MOUSE' ? '' : 'none';
+  document.getElementById('kmAdvCcWrap').style.display    = t === 'MEDIA' ? '' : 'none';
+  document.getElementById('kmAdvModsWrap').style.display  = needsMods ? '' : 'none';
+
+  // One numeric field serves two unrelated purposes, so it says which one it is.
+  // LT packs the layer into 4 bits; the layer ops get a byte; a macro id is a
+  // full byte of its own namespace.
+  const num = document.getElementById('kmAdvNum');
+  const lbl = { MACRO: 'macro #', AUTOCLICK: 'slot #' }[t] || 'layer';
+  document.getElementById('kmAdvNumLbl').textContent = lbl;
+  const acMax = Math.max(0, kmAutoclickSlots() - 1);
+  num.max = t === 'MACRO' ? 255 : t === 'AUTOCLICK' ? acMax : (t === 'LT' ? 15 : 31);
+  if (parseInt(num.value) > parseInt(num.max)) num.value = num.max;
+
+  // Say so when the firmware cannot act on what is about to be set. The keycode
+  // is stored and drawn on the key either way, so without this the only symptom
+  // is a key that does nothing and gives no clue why.
+  const warn = kmAdvWarning(t);
+  document.getElementById('kmAdvNote').textContent = warn;
+  document.getElementById('kmAdvNoteWrap').style.display = warn ? '' : 'none';
+
+  const v = kmAdvValue();
+  document.getElementById('kmAdvVal').textContent =
+    '= 0x' + v.toString(16).padStart(4,'0') + '  (' + kmLabel(v).replace('\n',' ') + ')';
+}
+
+// Empty string means "this will work".
+function kmAdvWarning(t) {
+  const need = { MEDIA:'consumer', MOUSE:'mousekeys', MACRO:'macros',
+                 CAPSWRD:'caps_word', OSL:'layers', OSM:'oneshot',
+                 MO:'layers', TO:'layers', TG:'layers', DF:'layers',
+                 LT:'layers' }[t];
+  if (need && !kmFeat(need))
+    return '⚠ this firmware was built without KB_FEATURE_' + need.toUpperCase() +
+           ' — the key will be stored but will do nothing.';
+  if (t === 'AUTOCLICK' && kmAutoclickSlots() === 0)
+    return '⚠ this board declares no autoclick slots — set KB_FEATURE_AUTOCLICK=ON ' +
+           'and define AUTOCLICKS in its keyboard.h.';
+  return '';
+}
+function kmAdvApply() { kmApply(kmAdvValue()); }
+
+// ── Mutation ────────────────────────────────────────────────────────────────
+async function kmApply(kc) {
+  // The picker is shared. kmEncSel being set means it was opened from an
+  // encoder card, and the edit goes to a different endpoint entirely.
+  if (acSel !== null) return acApplyKey(kc);
+  if (kmEncSel) return kmEncApply(kc);
+  if (!kmSel) return;
+  const idx = kmSel.row * kmInfo.cols + kmSel.col;
+  const prev = kmLayers[kmCur][idx];
+  kmLayers[kmCur][idx] = kc;
+  kmPickClose();
+  kmRenderLayers();
+  kmRender();
+  const j = await kmPush(kmCur);
+  if (!j) { kmLayers[kmCur][idx] = prev; kmRender(); return; }
+  kmFlag(true);
+}
+
+// Push one whole layer. The firmware rejects a partial layer, so there is no
+// half-applied state to reason about.
+async function kmPush(layer) {
+  return await api('/api/keymap', { layer: layer, keys: kmLayers[layer] }, { quiet:true });
+}
+
+async function kmSave() {
+  const j = await api('/api/keymap/save', {});
+  if (!j) return;
+  logMsg('keymap: flash write queued — USB pauses briefly', 'info');
+  setTimeout(async () => {
+    const info = await kmGet('/api/keymap/info');
+    if (info && info.ok) kmFlag(info.dirty);
+  }, 700);
+}
+
+async function kmRevert() {
+  if (!confirm('Discard the runtime keymap and go back to the one compiled into the firmware?')) return;
+  const j = await api('/api/keymap/reset', { erase:false });
+  if (!j) return;
+  await kmLoad(true);
+}
+
+function kmDownload(name, text, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: mime }));
+  a.download = name;
+  a.click();
+}
+
+/*
+ * A complete snapshot: keys, encoders AND macros.
+ *
+ * The earlier version exported only `layers`, which meant an export was a
+ * partial backup that looked like a whole one — restore it and your macros were
+ * quietly gone. Version 2 carries everything the editor can change.
+ */
+function kmExport() {
+  const doc = {
+    format: 'nethid-keymap',
+    version: 2,
+    board: kmInfo.board,
+    rows: kmInfo.rows,
+    cols: kmInfo.cols,
+    encoders: kmInfo.encoders | 0,
+    layers: kmLayers,
+    encoder_map: kmEnc,
+    macros: mbMacros || {},
+  };
+  kmDownload('nethid-keymap-' + kmInfo.board + '.json',
+             JSON.stringify(doc, null, 1), 'application/json');
+}
+
+
+
+async function kmImport(ev) {
+  const f = ev.target.files[0]; if (!f) return;
+  ev.target.value = '';
+  let d;
+  try { d = JSON.parse(await f.text()); } catch (e) { logMsg('keymap: bad JSON', 'err'); return; }
+  if (d.rows !== kmInfo.rows || d.cols !== kmInfo.cols) {
+    logMsg('keymap: file is ' + d.rows + '×' + d.cols + ', board is ' +
+           kmInfo.rows + '×' + kmInfo.cols, 'err');
+    return;
+  }
+  for (let l = 0; l < Math.min(d.layers.length, kmInfo.layers); l++) {
+    kmLayers[l] = d.layers[l];
+    if (!await kmPush(l)) return;
+  }
+
+  // Version 1 exports carried only `layers`. Absent sections are left alone
+  // rather than cleared: an old backup should not silently wipe macros it never
+  // knew about.
+  if (d.encoder_map && kmInfo.encoders) {
+    for (let l = 0; l < Math.min(d.encoder_map.length, kmInfo.layers); l++)
+      for (let e = 0; e < Math.min((d.encoder_map[l]||[]).length, kmInfo.encoders); e++)
+        for (let a = 0; a < 3; a++) {
+          kmEnc[l][e][a] = d.encoder_map[l][e][a];
+          if (!await api('/api/keymap/encoders',
+                         { layer:l, index:e, action:a, kc:kmEnc[l][e][a] },
+                         { quiet:true })) return;
+        }
+    kmRenderEncoders();
+  }
+
+  if (d.macros) {
+    for (const id of Object.keys(d.macros)) {
+      mbMacros[id] = d.macros[id];
+      if (!await api('/api/macro', { id:+id, steps:d.macros[id] }, { quiet:true })) return;
+    }
+    mbRender();
+  }
+
+  kmFlag(true);
+  kmRenderLayers();
+  kmRender();
+  logMsg('keymap: imported', 'ok');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape' || !kmPickIsOpen()) return;
+  // Swallow it so nothing else in the UI reacts to the same Escape.
+  e.stopPropagation();
+  e.preventDefault();
+  kmPickClose();
+}, true);
+// Only fetch when the tab is actually opened — 8 layer requests on every page
+// load would be rude, and most sessions never touch this tab.
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-tab="keymap"]');
+  if (t) setTimeout(() => kmLoad(false), 0);
+}, true);
+// ── Macro builder ───────────────────────────────────────────────────────────
+// Mirrors the custom-button step model (tap / text / delay), plus hold and
+// release, which a physical key needs and a browser-driven button does not.
+let mbMacros = {};      // id -> [step]
+let mbCur = null;
+let mbCount = 0, mbUsed = 0, mbSize = 0;
+
+async function mbLoad() {
+  const j = await kmGet('/api/macro');
+  if (!j || !j.ok) { document.getElementById('mbWrap').hidden = true; return; }
+  document.getElementById('mbWrap').hidden = false;
+  mbCount = j.count; mbUsed = j.used; mbSize = j.size;
+  mbMacros = {};
+  (j.macros || []).forEach(m => mbMacros[m.id] = m.steps);
+  if (mbCur === null) mbCur = 0;
+  mbRender();
+}
+
+function mbRender() {
+  document.getElementById('mbPool').textContent = mbUsed + ' / ' + mbSize + ' bytes';
+  const slots = document.getElementById('mbSlots');
+  slots.innerHTML = '';
+  for (let i = 0; i < mbCount; i++) {
+    const b = document.createElement('button');
+    const filled = mbMacros[i] && mbMacros[i].length;
+    b.className = 'mb-slot' + (i === mbCur ? ' on' : '') + (filled ? ' filled' : '');
+    b.textContent = 'M' + i + (filled ? ' (' + mbMacros[i].length + ')' : '');
+    b.onclick = () => { mbCur = i; mbRender(); };
+    slots.appendChild(b);
+  }
+  mbRenderSteps();
+}
+
+const MB_MODS = [['Ctrl',1],['Shift',2],['Alt',4],['GUI',8],
+                 ['RCtrl',16],['RShift',32],['RAlt',64],['RGUI',128]];
+
+function mbRenderSteps() {
+  const ed = document.getElementById('mbEditor');
+  ed.innerHTML = '';
+  const steps = mbMacros[mbCur] || [];
+
+  const list = document.createElement('div');
+  list.className = 'mb-steps';
+  if (!steps.length) {
+    const e = document.createElement('div');
+    e.className = 'mb-empty';
+    e.textContent = 'M' + mbCur + ' is empty — add a step below.';
+    list.appendChild(e);
+  }
+  steps.forEach((st, i) => list.appendChild(mbStepRow(st, i, steps.length)));
+  ed.appendChild(list);
+
+  const add = document.createElement('div');
+  add.className = 'mb-add';
+  [['+ tap','tap'],['+ hold','down'],['+ release','up'],['+ text','text'],['+ delay','delay']]
+    .forEach(([label, t]) => {
+      const b = document.createElement('button');
+      b.className = 'btn km-sec'; b.textContent = label;
+      b.onclick = () => mbAddStep(t);
+      add.appendChild(b);
+    });
+  ed.appendChild(add);
+}
+
+function mbStepRow(st, i, total) {
+  const row = document.createElement('div');
+  row.className = 'mb-step';
+
+  const num = document.createElement('span');
+  num.className = 'mb-n'; num.textContent = (i + 1);
+  row.appendChild(num);
+
+  const kind = document.createElement('select');
+  [['tap','tap'],['down','hold'],['up','release'],['text','text'],['delay','delay']]
+    .forEach(([v, label]) => {
+      const o = document.createElement('option');
+      o.value = v; o.textContent = label; if (st.t === v) o.selected = true;
+      kind.appendChild(o);
+    });
+  kind.onchange = () => {
+    const t = kind.value;
+    mbMacros[mbCur][i] = (t === 'text')  ? {t:'text', value:''}
+                       : (t === 'delay') ? {t:'delay', ms:250}
+                       : {t:t, mod:0, key:KC.A};
+    mbRenderSteps(); mbPush();
+  };
+  row.appendChild(kind);
+
+  if (st.t === 'text') {
+    const inp = document.createElement('input');
+    inp.type = 'text'; inp.value = st.value || '';
+    inp.maxLength = 64;
+    inp.placeholder = 'text to type (max 64)';
+    inp.oninput = () => { st.value = inp.value; };
+    inp.onchange = () => mbPush();
+    row.appendChild(inp);
+  } else if (st.t === 'delay') {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.min = 0; inp.max = 65535; inp.step = 10;
+    inp.value = st.ms; inp.style.width = '82px';
+    inp.oninput = () => { st.ms = parseInt(inp.value) || 0; };
+    inp.onchange = () => mbPush();
+    row.appendChild(inp);
+    const u = document.createElement('span');
+    u.style.cssText = 'font-size:11px;opacity:.5'; u.textContent = 'ms';
+    row.appendChild(u);
+  } else {
+    const mods = document.createElement('span');
+    mods.className = 'mb-mods';
+    MB_MODS.forEach(([label, bit]) => {
+      const l = document.createElement('label');
+      const c = document.createElement('input');
+      c.type = 'checkbox'; c.checked = !!(st.mod & bit);
+      c.onchange = () => {
+        st.mod = c.checked ? (st.mod | bit) : (st.mod & ~bit);
+        mbPush();
+      };
+      l.appendChild(c); l.appendChild(document.createTextNode(label));
+      mods.appendChild(l);
+    });
+    row.appendChild(mods);
+
+    const sel = document.createElement('select');
+    const none = document.createElement('option');
+    none.value = 0; none.textContent = '(no key)';
+    sel.appendChild(none);
+    Object.keys(KC).forEach(nm => {
+      if (KC[nm] === 0 || KC[nm] === 1) return;
+      const o = document.createElement('option');
+      o.value = KC[nm]; o.textContent = nm;
+      sel.appendChild(o);
+    });
+    sel.value = st.key || 0;
+    sel.onchange = () => { st.key = parseInt(sel.value); mbPush(); };
+    row.appendChild(sel);
+  }
+
+  const up = document.createElement('button');
+  up.className = 'mb-mv'; up.textContent = '\u25B2'; up.title = 'move up';
+  up.disabled = i === 0;
+  up.onclick = () => mbMove(i, -1);
+  row.appendChild(up);
+
+  const dn = document.createElement('button');
+  dn.className = 'mb-mv'; dn.textContent = '\u25BC'; dn.title = 'move down';
+  dn.disabled = i === total - 1;
+  dn.onclick = () => mbMove(i, 1);
+  row.appendChild(dn);
+
+  const x = document.createElement('button');
+  x.className = 'mb-x'; x.textContent = '\u00D7'; x.title = 'delete step';
+  x.onclick = () => { mbMacros[mbCur].splice(i, 1); mbRender(); mbPush(); };
+  row.appendChild(x);
+
+  return row;
+}
+
+function mbAddStep(t) {
+  if (!mbMacros[mbCur]) mbMacros[mbCur] = [];
+  mbMacros[mbCur].push(t === 'text'  ? {t:'text', value:''}
+                     : t === 'delay' ? {t:'delay', ms:250}
+                     : {t:t, mod:0, key:KC.A});
+  mbRender(); mbPush();
+}
+
+function mbMove(i, d) {
+  const a = mbMacros[mbCur];
+  const j = i + d;
+  if (j < 0 || j >= a.length) return;
+  [a[i], a[j]] = [a[j], a[i]];
+  mbRender(); mbPush();
+}
+
+// The whole macro goes every time. They are tens of bytes; a diff protocol
+// would be more code than the thing it optimises.
+async function mbPush() {
+  const steps = mbMacros[mbCur] || [];
+  const j = await api('/api/macro', { id: mbCur, steps: steps }, { quiet:true });
+  if (!j) return;
+  if (j.used !== undefined) { mbUsed = j.used; mbSize = j.size; }
+  document.getElementById('mbPool').textContent = mbUsed + ' / ' + mbSize + ' bytes';
+  document.getElementById('mbSlots').childNodes.forEach((b, i) => {
+    const filled = mbMacros[i] && mbMacros[i].length;
+    b.className = 'mb-slot' + (i === mbCur ? ' on' : '') + (filled ? ' filled' : '');
+    b.textContent = 'M' + i + (filled ? ' (' + mbMacros[i].length + ')' : '');
+  });
+}
+
+async function mbSave() {
+  if (!await api('/api/macro/save', {})) return;
+  logMsg('macros: flash write queued — USB pauses briefly', 'info');
+}
+
+async function mbClear() {
+  if (!confirm('Delete every stored macro? Keys mapped to KB_MACRO(n) fall back to compiled C.')) return;
+  if (!await api('/api/macro/clear', {})) return;
+  await mbLoad();
+}
+
+// ── Autoclick slots ─────────────────────────────────────────────────────────
+// AUTOCLK(n) picks a slot; this is where a slot says what it actually does.
+// Target, rate and trigger were compile-time only, so "add an autoclicker"
+// meant editing keyboard.h and reflashing.
+const AC_HOLD = 1, AC_TAP2 = 2, AC_TAP3 = 4;
+
+let acInfo = null;      // {count, min_ms, max_ms, tap_window_ms, rate_override_ms}
+let acSlots = [];       // [{target, interval_ms, trigger}]
+let acCur = 0;
+let acSel = null;       // non-null while the shared key picker is editing a target
+
+async function acLoad() {
+  const j = await kmGet('/api/autoclick');
+  const wrap = document.getElementById('acWrap');
+  // 404 when the firmware was built without KB_FEATURE_AUTOCLICK. Hide rather
+  // than show an editor whose every edit would fail.
+  // Clear as well as hide: leaving the old chips in a hidden panel means a
+  // later reload that shows it again briefly displays slots from before.
+  if (!j || !j.ok || !j.count) {
+    wrap.hidden = true;
+    acSlots = []; acInfo = null; acCur = 0;
+    document.getElementById('acSlots').innerHTML = '';
+    document.getElementById('acEditor').innerHTML = '';
+    return;
+  }
+  wrap.hidden = false;
+  acInfo = j;
+  acSlots = j.slots || [];
+  if (acCur >= acSlots.length) acCur = 0;
+  acFlag(j.dirty);
+  acRender();
+}
+
+function acFlag(dirty) {
+  const e = document.getElementById('acFlag');
+  e.className = 'km-flag ' + (dirty ? 'dirty' : 'clean');
+  e.textContent = dirty ? 'unsaved' : 'saved';
+}
+
+function acRender() {
+  const slots = document.getElementById('acSlots');
+  slots.innerHTML = '';
+  acSlots.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'mb-slot' + (i === acCur ? ' on' : '') + ' filled';
+    b.textContent = 'AUTO' + i;
+    b.title = kmLabel(s.target).replace('\n', ' ') + ' every ' + s.interval_ms + ' ms';
+    b.onclick = () => { acCur = i; acRender(); };
+    slots.appendChild(b);
+  });
+
+  const s = acSlots[acCur];
+  const ed = document.getElementById('acEditor');
+  if (!s) { ed.innerHTML = ''; return; }
+
+  const trig = s.trigger | 0;
+  ed.innerHTML =
+    '<div class="ac-row">' +
+      '<span class="ac-lbl">repeats</span>' +
+      '<button class="ac-key" id="acKeyBtn">' + escHtml(kmLabel(s.target).replace('\n', ' ')) + '</button>' +
+      '<span class="ac-lbl" style="min-width:0;opacity:.45">any keycode — a mouse button, a letter, a macro</span>' +
+    '</div>' +
+    '<div class="ac-row">' +
+      '<span class="ac-lbl">every</span>' +
+      '<input type="number" class="ac-num" id="acMs" value="' + (s.interval_ms | 0) + '" ' +
+        'min="' + acInfo.min_ms + '" max="' + acInfo.max_ms + '">' +
+      '<span class="ac-lbl" style="min-width:0;opacity:.45">ms (' +
+        acInfo.min_ms + '–' + acInfo.max_ms + ')</span>' +
+    '</div>' +
+    '<div class="ac-row">' +
+      '<span class="ac-lbl">trigger</span>' +
+      '<span class="ac-trig">' +
+        '<label><input type="checkbox" id="acHold"' + (trig & AC_HOLD ? ' checked' : '') + '> hold</label>' +
+        '<label><input type="checkbox" id="acTap2"' + (trig & AC_TAP2 ? ' checked' : '') + '> double-tap toggles</label>' +
+        '<label><input type="checkbox" id="acTap3"' + (trig & AC_TAP3 ? ' checked' : '') + '> triple-tap toggles</label>' +
+      '</span>' +
+    '</div>' +
+    '<div class="ac-row"><span class="ac-lbl"></span>' +
+      '<span class="ac-warn" id="acWarn"></span></div>';
+
+  document.getElementById('acKeyBtn').onclick = () => acPickOpen(acCur);
+  document.getElementById('acMs').onchange = () => acPush();
+  // Both tap counts at once is ambiguous, not richer — the firmware resolves it
+  // to triple and the double bit does nothing, so the boxes exclude each other.
+  //
+  // These RETURN the promise. A fire-and-forget acPush() finishes whenever its
+  // POST comes back, which can be after the next edit has already put a
+  // validation warning on screen — and the late completion then wipes it.
+  const t2 = document.getElementById('acTap2'), t3 = document.getElementById('acTap3');
+  t2.onchange = () => { if (t2.checked) t3.checked = false; return acPush(); };
+  t3.onchange = () => { if (t3.checked) t2.checked = false; return acPush(); };
+  document.getElementById('acHold').onchange = () => acPush();
+
+  acHint();
+}
+
+// Chip labels only. A successful edit must not rebuild the editor: that discards
+// whatever is in the number field mid-typing and clears any warning shown since.
+function acRenderSlots() {
+  document.querySelectorAll('#acSlots .mb-slot').forEach((b, i) => {
+    const s = acSlots[i];
+    if (s) b.title = kmLabel(s.target).replace('\n', ' ') + ' every ' + s.interval_ms + ' ms';
+  });
+}
+
+function acHint() {
+  const w = acInfo.rate_override_ms | 0;
+  document.getElementById('acHint').innerHTML =
+    'Edits apply immediately — the keyboard is already using them, nothing is flashed yet. ' +
+    '<b>Save slots to flash</b> makes them survive a power cycle. ' +
+    'A slot with <b>hold</b> repeats while the key is down; a tap trigger latches it on and ' +
+    'any further tap stops it. Both together is the useful combination. ' +
+    'Assign a slot to a key with <b>AUTOCLK(n)</b> in the key picker.' +
+    (w ? '<br><b>Note:</b> the SETTINGS tab\'s <code>autoclick_ms</code> is set to ' + w +
+         ' ms, which overrides every slot\'s own rate. Set it to 0 to use the rates below.' : '');
+}
+
+function acPickOpen(i) {
+  acSel = i;
+  kmSel = null; kmEncSel = null;      // this picker edits an autoclick target
+  document.getElementById('kmPickTitle').textContent =
+    'autoclick slot ' + i + '  ·  currently ' +
+    kmLabel(acSlots[i].target).replace('\n', ' ');
+  document.getElementById('kmSearch').value = '';
+  kmBuildList();
+  kmBuildKcSelect();
+  kmAdvSync();
+  document.getElementById('kmPicker').classList.add('on');
+  document.getElementById('kmSearch').focus();
+}
+
+async function acApplyKey(kc) {
+  const i = acSel;
+  acSel = null;
+  kmPickClose();
+  // A slot that repeats another autoclick key is a loop with no exit; the
+  // firmware's `emitting` guard stops it recursing, so it would simply never
+  // fire — refuse it here where it can be explained.
+  if ((kc & 0xFF00) === KMQ.AUTOCLICK) {
+    logMsg('autoclick: a slot cannot repeat another autoclick key', 'err');
+    return;
+  }
+  acSlots[i].target = kc;
+  acRender();
+  await acPush(i);
+}
+
+async function acPush(i) {
+  if (i === undefined) i = acCur;
+  const s = acSlots[i];
+  // Read the live controls, so a rate typed and a trigger ticked in either
+  // order both land in the same POST.
+  if (i === acCur && document.getElementById('acMs')) {
+    s.interval_ms = parseInt(document.getElementById('acMs').value, 10) || 0;
+    s.trigger = (document.getElementById('acHold').checked ? AC_HOLD : 0) |
+                (document.getElementById('acTap2').checked ? AC_TAP2 : 0) |
+                (document.getElementById('acTap3').checked ? AC_TAP3 : 0);
+  }
+  const warn = document.getElementById('acWarn');
+  if (!s.trigger) {
+    if (warn) warn.textContent = '⚠ pick at least one trigger — a slot with none can never start.';
+    return;
+  }
+  if (s.interval_ms < acInfo.min_ms || s.interval_ms > acInfo.max_ms) {
+    if (warn) warn.textContent =
+      '⚠ rate must be ' + acInfo.min_ms + '–' + acInfo.max_ms + ' ms.';
+    return;
+  }
+  if (warn) warn.textContent = '';
+
+  const j = await api('/api/autoclick', {
+    slot: i, target: s.target, interval_ms: s.interval_ms, trigger: s.trigger,
+  }, { quiet: true });
+  // api() only returns null for 401 and network failures — a 400 comes back as
+  // a perfectly truthy {error:...}. Check ok, or a rejected edit would show as
+  // applied and the UI would disagree with the firmware from then on.
+  if (!j || !j.ok) { await acLoad(); return; }
+  acFlag(true);
+  acRenderSlots();
+}
+
+async function acSave() {
+  const j = await api('/api/autoclick/save', {});
+  if (!j || !j.ok) return;
+  logMsg('autoclick: flash write queued — USB pauses briefly', 'info');
+  setTimeout(acLoad, 700);
+}
+
+async function acRevert() {
+  if (!confirm('Discard the runtime autoclick slots and go back to the ones compiled into the firmware?')) return;
+  const j = await api('/api/autoclick/reset', { erase: false });
+  if (!j || !j.ok) return;
+  await acLoad();
+}
+
+let kmRT = null;
+window.addEventListener('resize', () => {
+  if (!kmLoaded || !kmPhysView) return;
+  clearTimeout(kmRT);
+  kmRT = setTimeout(kmRenderPhys, 120);
+});
+// ...and if it happens to be the tab that opens first, nobody clicked anything.
+window.addEventListener('load', () => {
+  const p = document.getElementById('panel-keymap');
+  if (p && p.classList.contains('active')) kmLoad(false);
+});
+</script>
+</div>
+<!--@@ENDTAB@@-->
+<!--@@TAB wifi@@-->
+<div class="panel" id="panel-wifi" data-tabname="wifi" data-tablabel="WIFI">
+<style>
+  .wf-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+  .wf-mode{font:600 11px/1 ui-monospace,monospace;padding:4px 8px;border-radius:4px}
+  .wf-mode.ap{background:#5c3a00;color:#ffce8a}
+  .wf-mode.sta{background:#14421f;color:#8ce4a4}
+  .wf-list{display:grid;gap:6px;margin-bottom:14px}
+  .wf-net{display:flex;flex-wrap:wrap;gap:9px;align-items:center;padding:8px 10px;
+          border:1px solid #2f2f38;border-radius:5px;background:#17171d}
+  .wf-ssid{font:600 13px/1 ui-monospace,monospace;flex:1;min-width:120px;word-break:break-all}
+  .wf-src{font:600 10px/1 ui-monospace,monospace;padding:3px 6px;border-radius:3px;
+          letter-spacing:.05em}
+  .wf-src.stored{background:#1e3a5c;color:#9cc8f0}
+  .wf-src.compiled{background:#2b2b33;color:#999}
+  .wf-add{display:grid;gap:8px;max-width:420px;padding:12px;border:1px solid #2f2f38;
+          border-radius:6px;background:#15151b}
+  .wf-add label{font:600 11px/1.6 ui-monospace,monospace;opacity:.7}
+  .wf-add input,.wf-add select{width:100%;padding:7px;border-radius:4px;
+          border:1px solid #3a3a44;background:#0f0f14;color:#eee;
+          font:400 13px/1 ui-monospace,monospace}
+  .wf-warn{border:1px solid #6b3a2a;background:#241612;border-radius:6px;padding:11px;
+           margin-bottom:14px;font-size:12px;line-height:1.55;color:#e8b7a4}
+  .wf-scan{display:grid;gap:5px;margin-bottom:14px}
+  .wf-ap{display:flex;gap:9px;align-items:center;padding:7px 10px;border-radius:5px;
+         border:1px solid #2f2f38;background:#17171d;cursor:pointer;text-align:left;
+         color:#e6e6ee;font:400 13px/1 ui-monospace,monospace;width:100%}
+  .wf-ap:hover{border-color:#2f6fd0}
+  .wf-ap.known{border-color:#4d7a52}
+  .wf-ap .n{flex:1;font-weight:600;word-break:break-all}
+  .wf-bars{font:600 11px/1 ui-monospace,monospace;opacity:.6;width:34px;text-align:right}
+  .wf-lock{font-size:11px;opacity:.55;width:16px}
+  .wf-h{font:600 10px/1.6 ui-monospace,monospace;opacity:.5;letter-spacing:.08em;
+        margin-bottom:5px}
+  .wf-none{font-size:12px;opacity:.5;padding:6px 0}
+</style>
+
+<div class="wf-bar">
+  <span class="wf-mode sta" id="wfMode">…</span>
+  <span style="font:600 11px/1 ui-monospace,monospace;opacity:.5" id="wfCount"></span>
+  <button class="btn" onclick="wfSave()">Save to flash</button>
+  <button class="btn" onclick="wfApply()">Save &amp; reboot</button>
+</div>
+
+<div class="wf-warn" id="wfApWarn" hidden>
+  <b>Setup mode.</b> This page is plain HTTP, not HTTPS — the captive-portal
+  redirect cannot present a certificate that validates for someone else's domain.
+  Anyone within radio range who has the setup password is talking to a device
+  that types into your host computer, so leave setup mode as soon as you are
+  done. Add your network below, then <b>Save &amp; reboot</b>.
+</div>
+
+<div class="wf-h">IN RANGE</div>
+<div class="wf-scan" id="wfScan"></div>
+
+<div class="wf-h">KNOWN TO THIS DEVICE</div>
+<div class="wf-list" id="wfList"></div>
+
+<div class="wf-add">
+  <div>
+    <label for="wfSsid">Network name (SSID) — or pick one above</label>
+    <input id="wfSsid" maxlength="32" placeholder="MyNetwork" autocomplete="off">
+  </div>
+  <div>
+    <label for="wfPass">Password</label>
+    <input id="wfPass" type="password" maxlength="63" placeholder="at least 8 characters" autocomplete="off">
+  </div>
+  <div>
+    <label for="wfAuth">Security</label>
+    <select id="wfAuth">
+      <option value="0">WPA2-AES</option>
+      <option value="1">WPA / WPA2 mixed</option>
+      <option value="2">WPA3 / WPA2 mixed</option>
+      <option value="3">WPA3 only</option>
+      <option value="4">Open (no password)</option>
+    </select>
+  </div>
+  <button class="btn" onclick="wfAdd()">Add network</button>
+  <div style="font-size:11px;opacity:.55;line-height:1.5">
+    Stored networks are tried before the ones compiled into the firmware, so adding
+    one here overrides a baked-in entry with the same name. Passwords are written to
+    flash in the clear and are never sent back to this page — the device will not read
+    a secret out to you, and anyone holding the board can read them off it.
+  </div>
+</div>
+
+<script>
+// Signal strength as something readable. RSSI is negative dBm: about -50 is
+// across the room, -80 is through a couple of walls and marginal.
+function wfBars(rssi) {
+  const n = rssi >= -55 ? 4 : rssi >= -67 ? 3 : rssi >= -78 ? 2 : 1;
+  return '\u2588'.repeat(n) + '\u2591'.repeat(4 - n);
+}
+
+let wfKnown = new Set();
+
+async function wfScan() {
+  const box = document.getElementById('wfScan');
+  const r = await fetch('/api/wifi/scan', { credentials:'same-origin', cache:'no-store' });
+  if (r.status === 401) { showLockOverlay(); return; }
+  const j = await r.json();
+  box.innerHTML = '';
+  const nets = (j && j.ok) ? (j.networks || []) : [];
+  if (!nets.length) {
+    const e = document.createElement('div');
+    e.className = 'wf-none';
+    e.textContent = 'No networks were in range when this device last scanned. '
+                  + 'Type the name below instead — hidden networks never appear here.';
+    box.appendChild(e);
+    return;
+  }
+  nets.sort((a, b) => b.rssi - a.rssi).forEach(nw => {
+    const b = document.createElement('button');
+    b.className = 'wf-ap' + (wfKnown.has(nw.ssid) ? ' known' : '');
+    b.innerHTML = '<span class="wf-bars">' + wfBars(nw.rssi) + '</span>'
+                + '<span class="wf-lock">' + (nw.secure ? '\u{1F512}' : '') + '</span>'
+                + '<span class="n"></span>';
+    b.querySelector('.n').textContent = nw.ssid + (wfKnown.has(nw.ssid) ? '  (known)' : '');
+    b.title = nw.rssi + ' dBm';
+    b.onclick = () => {
+      document.getElementById('wfSsid').value = nw.ssid;
+      document.getElementById('wfAuth').value = nw.secure ? '0' : '4';
+      document.getElementById('wfPass').focus();
+    };
+    box.appendChild(b);
+  });
+}
+
+async function wfLoad() {
+  const r = await fetch('/api/wifi', { credentials:'same-origin', cache:'no-store' });
+  if (r.status === 401) { showLockOverlay(); return; }
+  const j = await r.json();
+  if (!j || !j.ok) return;
+
+  const m = document.getElementById('wfMode');
+  m.className = 'wf-mode ' + (j.ap_mode ? 'ap' : 'sta');
+  m.textContent = j.ap_mode ? 'SETUP MODE (own network)' : 'connected to a network';
+  document.getElementById('wfApWarn').hidden = !j.ap_mode;
+  document.getElementById('wfCount').textContent =
+    j.stored + ' / ' + j.max + ' stored' + (j.dirty ? ' — unsaved' : '');
+
+  const list = document.getElementById('wfList');
+  list.innerHTML = '';
+  (j.networks || []).forEach(nw => {
+    const row = document.createElement('div');
+    row.className = 'wf-net';
+
+    const s = document.createElement('span');
+    s.className = 'wf-ssid'; s.textContent = nw.ssid;
+    row.appendChild(s);
+
+    const src = document.createElement('span');
+    src.className = 'wf-src ' + nw.source;
+    src.textContent = nw.source;
+    src.title = nw.source === 'compiled'
+      ? 'from env.h — reflash to change, or add a stored entry with the same name to override it'
+      : 'provisioned on the device';
+    row.appendChild(src);
+
+    if (nw.source === 'stored') {
+      const x = document.createElement('button');
+      x.className = 'btn'; x.textContent = 'Forget';
+      x.onclick = () => wfForget(nw.ssid);
+      row.appendChild(x);
+    }
+    list.appendChild(row);
+  });
+
+  // Feeds the "(known)" marker on the in-range list, so it is obvious which
+  // rows are already configured and which need a password.
+  wfKnown = new Set((j.networks || []).map(nw => nw.ssid));
+  await wfScan();
+}
+
+async function wfAdd() {
+  const ssid = document.getElementById('wfSsid').value.trim();
+  const pass = document.getElementById('wfPass').value;
+  const auth = parseInt(document.getElementById('wfAuth').value);
+  if (!ssid) { logMsg('wifi: enter a network name', 'err'); return; }
+  if (auth !== 4 && pass.length < 8) {
+    logMsg('wifi: WPA passwords are at least 8 characters', 'err'); return;
+  }
+  if (!await api('/api/wifi', { ssid: ssid, password: pass, auth: auth })) return;
+  document.getElementById('wfSsid').value = '';
+  document.getElementById('wfPass').value = '';
+  logMsg('wifi: added ' + ssid + ' — not saved to flash yet', 'ok');
+  await wfLoad();
+}
+
+async function wfForget(ssid) {
+  if (!confirm('Forget ' + ssid + '?')) return;
+  if (!await api('/api/wifi/forget', { ssid: ssid })) return;
+  await wfLoad();
+}
+
+async function wfSave() {
+  if (!await api('/api/wifi/save', {})) return;
+  logMsg('wifi: flash write queued', 'info');
+  setTimeout(wfLoad, 700);
+}
+
+async function wfApply() {
+  if (!confirm('Save and reboot? The device will leave setup mode and try to join a stored network.')) return;
+  if (!await api('/api/wifi/apply', {})) return;
+  logMsg('wifi: saved — rebooting. Rejoin your normal network to find it again.', 'info');
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-tab="wifi"]')) setTimeout(wfLoad, 0);
+}, true);
+window.addEventListener('load', () => {
+  const p = document.getElementById('panel-wifi');
+  if (p && p.classList.contains('active')) wfLoad();
+});
+</script>
+</div>
+<!--@@ENDTAB@@-->
+<!--@@TAB settings@@-->
+<div class="panel" id="panel-settings" data-tabname="settings" data-tablabel="SETTINGS">
+<style>
+  .st-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px}
+  .st-flag{font:600 11px/1 ui-monospace,monospace;padding:4px 8px;border-radius:4px}
+  .st-flag.dirty{background:#7a4d00;color:#ffd08a}
+  .st-flag.clean{background:#14421f;color:#8ce4a4}
+  .st-list{display:grid;gap:7px;max-width:640px}
+  .st-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:9px 11px;
+          border:1px solid #2f2f38;border-radius:5px;background:#17171d}
+  .st-name{font:600 12px/1.3 ui-monospace,monospace;min-width:150px}
+  .st-help{flex:1;min-width:190px;font-size:11px;opacity:.6;line-height:1.45}
+  .st-row input[type=number]{width:88px;padding:5px;border-radius:4px;
+          border:1px solid #3a3a44;background:#0f0f14;color:#eee;
+          font:400 12px/1 ui-monospace,monospace}
+  .st-def{font:600 10px/1 ui-monospace,monospace;opacity:.4;white-space:nowrap}
+  .st-ovr{font:600 10px/1 ui-monospace,monospace;color:#8ab4f0}
+  .st-rst{border:1px solid #3a3a44;background:#20202a;color:#aaa;border-radius:4px;
+          padding:4px 8px;font-size:10px;cursor:pointer}
+</style>
+
+<div class="st-bar">
+  <span class="st-flag clean" id="stFlag">—</span>
+  <button class="btn" onclick="stSave()">Save to flash</button>
+  <button class="btn" onclick="stResetAll()">Reset all to defaults</button>
+</div>
+
+<div class="st-list" id="stList"></div>
+
+<div class="km-hint" style="margin-top:14px">
+  Changes take effect immediately; <b>Save to flash</b> makes them survive a power
+  cycle. A setting you never touch keeps following the value compiled into
+  <code>config.h</code>, so a later rebuild still moves it — only fields marked
+  <b>set</b> are pinned.
+  <br><br>
+  Options that decide what gets <i>compiled</i> — the web server, the TCP socket,
+  HTTPS, IR/RF, the keyboard itself — are not here and cannot be. A runtime toggle
+  cannot un-link code, and a button that disables the web server from inside the
+  web server has exactly one effect. Authentication is compile-time for a related
+  reason: one session should not be able to remove the need for the next one.
+</div>
+
+<script>
+async function stLoad() {
+  const r = await fetch('/api/settings', { credentials:'same-origin', cache:'no-store' });
+  if (r.status === 401) { showLockOverlay(); return; }
+  const j = await r.json();
+  if (!j || !j.ok) return;
+
+  const f = document.getElementById('stFlag');
+  f.className = 'st-flag ' + (j.dirty ? 'dirty' : 'clean');
+  f.textContent = j.dirty ? 'unsaved' : 'saved';
+
+  const list = document.getElementById('stList');
+  list.innerHTML = '';
+  // Rendered from whatever the firmware reports, so this page never drifts out
+  // of step with the table in settings.cpp.
+  j.fields.forEach(fd => list.appendChild(stRow(fd)));
+}
+
+function stRow(fd) {
+  const row = document.createElement('div');
+  row.className = 'st-row';
+
+  const n = document.createElement('span');
+  n.className = 'st-name'; n.textContent = fd.name;
+  row.appendChild(n);
+
+  let input;
+  if (fd.type === 'bool') {
+    input = document.createElement('input');
+    input.type = 'checkbox';
+    input.checked = !!fd.value;
+    input.onchange = () => stSet(fd.name, input.checked ? 1 : 0);
+  } else {
+    input = document.createElement('input');
+    input.type = 'number';
+    input.min = fd.min; input.max = fd.max; input.value = fd.value;
+    input.onchange = () => {
+      const v = parseInt(input.value);
+      if (isNaN(v) || v < fd.min || v > fd.max) {
+        logMsg(fd.name + ': must be ' + fd.min + '–' + fd.max, 'err');
+        input.value = fd.value;
+        return;
+      }
+      stSet(fd.name, v);
+    };
+  }
+  row.appendChild(input);
+
+  const h = document.createElement('span');
+  h.className = 'st-help'; h.textContent = fd.help;
+  row.appendChild(h);
+
+  const d = document.createElement('span');
+  if (fd.overridden) {
+    d.className = 'st-ovr';
+    d.textContent = 'set (default ' + fd.default + ')';
+  } else {
+    d.className = 'st-def';
+    d.textContent = 'default';
+  }
+  row.appendChild(d);
+
+  if (fd.overridden) {
+    const b = document.createElement('button');
+    b.className = 'st-rst'; b.textContent = 'reset';
+    b.onclick = () => stReset(fd.name);
+    row.appendChild(b);
+  }
+  return row;
+}
+
+async function stSet(field, value) {
+  if (!await api('/api/settings', { field: field, value: value })) return;
+  await stLoad();
+}
+
+async function stReset(field) {
+  if (!await api('/api/settings/reset', { field: field })) return;
+  await stLoad();
+}
+
+async function stResetAll() {
+  if (!confirm('Drop every override and go back to the values compiled into config.h?')) return;
+  if (!await api('/api/settings/reset', { all: 1 })) return;
+  await stLoad();
+}
+
+async function stSave() {
+  if (!await api('/api/settings/save', {})) return;
+  logMsg('settings: flash write queued — USB pauses briefly', 'info');
+  setTimeout(stLoad, 700);
+}
+
+document.addEventListener('click', e => {
+  if (e.target.closest('[data-tab="settings"]')) setTimeout(stLoad, 0);
+}, true);
+window.addEventListener('load', () => {
+  const p = document.getElementById('panel-settings');
+  if (p && p.classList.contains('active')) stLoad();
+});
+</script>
+</div>
+<!--@@ENDTAB@@-->
 <!--@@TAB customedit@@-->
 <div class="panel" id="panel-customedit" data-tabname="customedit" data-tablabel="+ CUSTOM" data-tabkind="add">
   <div class="ce-toolbar">
@@ -1357,6 +3269,152 @@ function openSettings() {
   const vt = document.getElementById('verboseToggle');
   if (vt) vt.checked = getVerbose();
   document.getElementById('settings-overlay').classList.add('visible');
+  // Clear here rather than inside pwLoad(): pwLoad also runs straight after a
+  // successful change, and clearing there would wipe the message confirming it.
+  // Opening the panel is the moment a password left in a field from last time —
+  // on a screen someone else may be looking at — should not still be there.
+  pwClear();
+  pwClearMsg();
+  pwLoad();
+}
+
+// ── Login password ──────────────────────────────────────────────────────────
+// The device holds the password (challenge-response needs it as the HMAC key),
+// so this changes what is stored, never what is displayed: nothing here ever
+// reads a password back out of the firmware.
+
+let pwInfo = null;
+
+async function pwLoad() {
+  const wrap = document.getElementById('pwWrap');
+  let j = null;
+  try {
+    const r = await fetch('/api/password');
+    j = await r.json();
+  } catch (e) { j = null; }
+  // 404 on a firmware built without ENABLE_WEB's password store, and 403 in AP
+  // setup mode, where changing the login is deliberately not offered.
+  if (!j || !j.ok) { wrap.hidden = true; pwInfo = null; return; }
+  wrap.hidden = false;
+  pwInfo = j;
+
+  const st = document.getElementById('pwState');
+  st.textContent = j.changed ? 'changed on this device'
+                             : 'as built into the firmware';
+  st.className = 'pw-state' + (j.changed ? ' on' : '');
+
+  // can_change false is a build-time policy, not a transient error. Disable the
+  // form and say why, rather than hiding it: a control that is absent looks
+  // like a missing feature, and someone goes looking in the wrong place.
+  const allowed = j.can_change !== false;
+  ['pwCur','pwNew','pwNew2','pwSave'].forEach(id =>
+    document.getElementById(id).disabled = !allowed);
+  document.getElementById('pwReset').disabled = !allowed || !j.changed;
+  if (!allowed) {
+    document.getElementById('pwHint').textContent = j.why ||
+      'This firmware does not allow changing the password over this connection.';
+    pwMsg('', '');
+    return;
+  }
+
+  document.getElementById('pwHint').innerHTML =
+    'Changes ' + (j.multiuser ? 'the password for <b>' + escHtml(j.user) + '</b>' :
+                                'this device\'s login password') +
+    ', stored on the keyboard. <b>Flashing firmware clears it</b> and the ' +
+    'password from <code>env.h</code> works again — that is the way back in if ' +
+    'you forget this one, so there is nothing to lock yourself out of ' +
+    'permanently. Between ' + j.min_len + ' and ' + j.max_len + ' characters.' +
+    (j.secure ? '' :
+      '<br><br>⚠ This page is served over plain HTTP, so a new password crosses ' +
+      'your network in the clear. Logging in does not — it uses a challenge — ' +
+      'but setting one has to send it. Do it on a network you trust, or build ' +
+      'with <code>-DENABLE_HTTPS=ON</code>.');
+}
+
+function pwMsg(text, kind) {
+  const e = document.getElementById('pwMsg');
+  e.textContent = text;
+  e.className = 'pw-msg' + (text ? ' ' + kind : '');
+}
+function pwClearMsg() { pwMsg('', ''); }
+
+function pwFields() {
+  return ['pwCur','pwNew','pwNew2'].map(id => document.getElementById(id));
+}
+function pwClear() { pwFields().forEach(e => e.value = ''); }
+
+async function pwChange() {
+  // Belt and braces with the disabled attribute: the form is also disabled when
+  // the firmware forbids this, and a password must not leave the browser
+  // because something re-enabled a field.
+  if (!pwInfo || pwInfo.can_change === false) return;
+  const [cur, neu, neu2] = pwFields().map(e => e.value);
+
+  // Validate before sending, so the common slips never put a password on the
+  // wire at all — and so the mismatch case names itself instead of coming back
+  // as a generic rejection from the device.
+  if (!neu || neu !== neu2) return pwMsg('The two new passwords do not match.', 'err');
+  if (neu.length < pwInfo.min_len || neu.length > pwInfo.max_len)
+    return pwMsg('New password must be ' + pwInfo.min_len + '–' + pwInfo.max_len +
+                 ' characters.', 'err');
+  if (neu === cur) return pwMsg('That is already the current password.', 'err');
+
+  const btn = document.getElementById('pwSave');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/password', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ current: cur, new: neu })
+    });
+    const j = await r.json();
+    if (!j || !j.ok) return pwMsg(pwError(j), 'err');
+    pwClear();
+    pwMsg('Password changed and saved to the keyboard.' +
+          (j.sessions_ended ? ' ' + j.sessions_ended + ' other session(s) signed out.' : ''),
+          'ok');
+    await pwLoad();
+  } catch (e) {
+    pwMsg('Could not reach the device.', 'err');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function pwRevert() {
+  if (!pwInfo || pwInfo.can_change === false) return;
+  const cur = document.getElementById('pwCur').value;
+  if (!cur) return pwMsg('Enter the current password to revert.', 'err');
+  if (!confirm('Revert to the password compiled into this firmware?\n\n' +
+               'The password you set on the device is discarded.')) return;
+  try {
+    const r = await fetch('/api/password/reset', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ current: cur })
+    });
+    const j = await r.json();
+    if (!j || !j.ok) return pwMsg(pwError(j), 'err');
+    pwClear();
+    pwMsg('Reverted. The firmware password is in force again.', 'ok');
+    await pwLoad();
+  } catch (e) {
+    pwMsg('Could not reach the device.', 'err');
+  }
+}
+
+// The device says which constraint failed; repeating "rejected" for all of them
+// would send you looking in the wrong place.
+function pwError(j) {
+  if (!j) return 'The device did not answer.';
+  switch (j.error) {
+    case 'wrong_password': return 'That is not the current password.';
+    case 'locked':         return 'Too many wrong attempts — locked for ' +
+                                  (j.retry_after_s || 0) + 's.';
+    case 'bad_length':     return 'New password must be ' + j.min_len + '–' +
+                                  j.max_len + ' characters.';
+    case 'unchanged':      return 'That is already the current password.';
+    case 'setup_mode':     return 'Not available in WiFi setup mode.';
+    default:               return j.detail || j.error || 'The device rejected it.';
+  }
 }
 function closeSettings() {
   document.getElementById('settings-overlay').classList.remove('visible');
@@ -1496,9 +3554,15 @@ function wakeHost() {
   logMsg('wake signal sent (host must allow USB wake)', 'ok');
 }
 
-document.getElementById('textInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter') { e.preventDefault(); sendText(); }
-});
+// #textInput is in the keyboard panel, which is not served to every user and
+// not served at all in AP setup mode. Guarded like the touchpad and media
+// widgets below it.
+const textInputEl = document.getElementById('textInput');
+if (textInputEl) {
+  textInputEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); sendText(); }
+  });
+}
 
 // ── Mouse ──────────────────────────────────────────────────────────────────
 let tp = document.getElementById('trackpad');
@@ -2076,6 +4140,11 @@ const CUSTOM_ICONS = [
 
 function renderCustomPanels() {
   const host = document.getElementById('customPanels');
+  // #customPanels lives inside the customedit fragment, which the server omits
+  // when that tab is not served — restricted grants, or AP setup mode, which
+  // serves only WIFI/KEYMAP/SETTINGS. Without this guard the null deref throws
+  // and takes the whole init block down with it.
+  if (!host) return;
   host.innerHTML = '';
   customCfg.tabs.forEach(tab => {
     const panel = document.createElement('div');
@@ -2827,19 +4896,33 @@ function ceSetText(ti,pi,bi,ci,si,raw) {
 }
 
 // ── Init ───────────────────────────────────────────────────────────────────
-buildKeyboard();
-buildMacros();
-buildTabBar();
-customLoad();
-renderCustom();
+// Each step is isolated. The server serves only the panels a user is granted,
+// so at any given load an arbitrary subset of the DOM these functions expect
+// simply is not there. Run bare and back to back, one null deref aborts the
+// whole top-level block: the page keeps its header and log box and loses the
+// tab bar entirely, which looks like the page failed to load rather than like
+// a bug in one function.
+function initStep(name, fn) {
+  try { fn(); }
+  catch (e) {
+    console.error('init step "' + name + '" failed:', e);
+    if (typeof logMsg === 'function') logMsg('init: ' + name + ' failed (see console)', 'err');
+  }
+}
+
+initStep('buildKeyboard', buildKeyboard);
+initStep('buildMacros',   buildMacros);
+initStep('buildTabBar',   buildTabBar);
+initStep('customLoad',    customLoad);
+initStep('renderCustom',  renderCustom);
 // Activate the first served tab (prefer a real tab over the "+ CUSTOM" chip).
-(function(){
+initStep('activateFirstTab', function(){
   let first = document.querySelector('.panel[data-tabname]:not([data-tabkind="add"])')
            || document.querySelector('.panel[data-tabname]');
   if (first) switchTab(first.getAttribute('data-tabname'));
-})();
+});
 // Reflect the stored OS in the selector
-(function(){ syncOsSelector(); })();
+initStep('syncOsSelector', syncOsSelector);
 
 // The Font Awesome stylesheet loads asynchronously from a CDN. The first
 // render may run before it arrives, so re-check and re-render once it's ready

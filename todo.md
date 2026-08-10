@@ -118,10 +118,10 @@ missing. The certificate tooling below is already tested host-side.
 
 ### Cert generation (host, no Pico needed)
 - [ ] Pick an FQDN (e.g. `nethid.example.com`) and decide the cert path:
-- [ ] **mkcert (recommended):** `./tools/make-cert-mkcert.sh nethid.example.com` →
+- [ ] **mkcert (recommended):** `./tools/cert/make-cert-mkcert.sh nethid.example.com` →
       confirm `include/server_cert.h` is created and `certs/server.{crt,key}` exist.
 - [ ] **Let's Encrypt / Cloudflare:** export `CF_Token`, run
-      `./tools/make-cert-letsencrypt.sh nethid.example.com` → confirm the header is created.
+      `./tools/cert/make-cert-letsencrypt.sh nethid.example.com` → confirm the header is created.
 - [ ] Sanity-check the header compiles: it's pure C strings; `gen_cert_header.py`
       prints the cert/key sizes and a fingerprint.
 

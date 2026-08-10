@@ -10,6 +10,21 @@
 #else
 #  include "env.h"
 #endif
+// The board header first, when a board is selected. Almost everything below is
+// an #ifndef default, and a default that lands BEFORE the board's own value is
+// not a harmless duplicate — it wins for every use site above wherever
+// keyboard.h eventually gets included, so two files can disagree about, say,
+// which key is the AP-mode key. oledpad asks for AP_MODE_COL 3 while the
+// default here is 5; that showed up only as a "redefined" warning.
+//
+// Board headers never include config.h back (they only mention it in comments),
+// so there is no cycle. Every target that compiles with ENABLE_KEYBOARD=1 has
+// the board directory on its include path — the firmware, the per-module
+// firmwares, and every tools/kbtest target.
+#if ENABLE_KEYBOARD
+#include "keyboard.h"
+#endif
+
 // ============================================================
 //  NetHID — User Configuration
 //  Edit this file, then rebuild and flash.
@@ -60,6 +75,100 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 
 #define WIFI_NETWORK_COUNT (sizeof(WIFI_NETWORKS)/sizeof(WIFI_NETWORKS[0]))
 
+// ── Keys held at boot ────────────────────────────────────────────────────────
+// Three gestures, all sampled the same way: the position must read as pressed
+// across ~32 ms of scans, so a bouncing switch on a rail that has only just
+// come up cannot trigger one by accident. All three are checked before USB and
+// WiFi, so a firmware that hangs later is still recoverable.
+//
+//   BOOTMAGIC   land in the RP2350 bootloader (the BOOTSEL button, reachable)
+//   AP_MODE     serve our own WiFi network for setup instead of joining one
+//   QUIET_BOOT  suppress the boot diagnostics typed into the host, once
+//   LOUD_BOOT   force them ON, overriding the stored setting, once
+//
+// Positions are (row, col) in the matrix, so what they mean physically depends
+// on the board. The defaults below assume the top row: leftmost, rightmost, and
+// second-from-left. A board can override any of them in its keyboard.h if its
+// layout makes a different choice obvious — these are #ifndef-guarded.
+//
+// Pick keys far enough apart that a slipped finger cannot land on the wrong
+// one; ending up in the bootloader when you wanted a quiet boot is annoying,
+// the reverse is worse.
+#ifndef BOOTMAGIC_ROW
+#define BOOTMAGIC_ROW   0
+#endif
+#ifndef BOOTMAGIC_COL
+#define BOOTMAGIC_COL   0
+#endif
+
+#ifndef AP_MODE_ROW
+#define AP_MODE_ROW     0
+#endif
+#ifndef AP_MODE_COL
+#define AP_MODE_COL     5
+#endif
+
+#ifndef QUIET_BOOT_ROW
+#define QUIET_BOOT_ROW  0
+#endif
+#ifndef QUIET_BOOT_COL
+#define QUIET_BOOT_COL  1
+#endif
+
+// LOUD_BOOT is the way back. Quiet boot can be turned on persistently from the
+// settings page, and a device that has been told to say nothing is exactly the
+// device you cannot diagnose — so holding this key forces diagnostics ON for
+// one boot, whatever the stored setting or the compiled QUIET_BOOT default say.
+// It also beats the quiet-boot key if you somehow hold both: between "say
+// nothing" and "say something", the recoverable choice wins.
+#ifndef LOUD_BOOT_ROW
+#define LOUD_BOOT_ROW   0
+#endif
+#ifndef LOUD_BOOT_COL
+#define LOUD_BOOT_COL   2
+#endif
+
+// Optional second key for bootmagic — when both are defined, BOTH must be held.
+// Useful if your top-left key is one you might plausibly rest a finger on.
+// #define BOOTMAGIC_ROW_2 3
+// #define BOOTMAGIC_COL_2 5
+
+// How the boot-key sample is taken. The key must read down in every scan across
+// SCANS * INTERVAL milliseconds.
+#ifndef BOOTMAGIC_SCANS
+#define BOOTMAGIC_SCANS 8
+#endif
+#ifndef BOOTMAGIC_SCAN_INTERVAL_MS
+#define BOOTMAGIC_SCAN_INTERVAL_MS 4
+#endif
+
+// ── Access-point setup mode ──────────────────────────────────────────────────
+// Hold AP_MODE_ROW/COL while plugging the board in and NetHID serves its own
+// network instead of joining one, so you can add WiFi credentials from a phone
+// with no router involved. Credentials you add there are stored in flash and
+// tried BEFORE the compiled list above.
+//
+// Deliberately not automatic. What sits behind this access point types into
+// whatever computer the Pico is plugged into, so it starts when you ask it to,
+// not when the router happens to be down. Set AP_MODE_AUTO_FALLBACK to 1 if you
+// want the old terminal WiFi failure to become an AP instead.
+//
+// AP_PASSWORD has NO default. An access point with a shipped-default password
+// is an open one, so ap_mode_start() refuses to run without at least 8
+// characters. Put it in env.h:
+//
+//     #define AP_PASSWORD "something-long"
+//
+#ifndef AP_SSID
+#define AP_SSID "NetHID-Setup"
+#endif
+#ifndef AP_IP
+#define AP_IP "192.168.4.1"
+#endif
+#ifndef AP_MODE_AUTO_FALLBACK
+#define AP_MODE_AUTO_FALLBACK 0
+#endif
+
 // Legacy single-network auth mode is no longer used for connection (each
 // network carries its own auth_mode above), but kept defined for reference.
 #define WIFI_AUTH_MODE  0
@@ -94,6 +203,14 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 // Lockout duration in seconds after too many wrong attempts.
 #define LOCKOUT_S               30
 
+// Shortest password /api/password will accept when changing it from the web UI.
+// This is a floor on what can be SET at runtime, not on what env.h may compile
+// in — an existing short password keeps working. It is also what stops "" from
+// arriving through a web form and disabling auth for the whole device.
+#ifndef WEB_PASSWORD_MIN_LEN
+#define WEB_PASSWORD_MIN_LEN    8
+#endif
+
 // ── Users (challenge-response login) ─────────────────────────
 // Define logins in env.h as a USER_LIST, one USER(name, password) per line:
 /*     #define USER_LIST \
@@ -127,7 +244,20 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 // ── Per-user web-UI tabs ─────────────────────────────────────
 // The web UI is served per-user: the firmware sends only the tabs a user may
 // see. ADMIN_USER sees every tab automatically. Grant tabs to other users in
-// env.h via TAB_GRANTS, one TAB_FOR(user, id) per line ("*" = everyone):
+// env.h via TAB_GRANTS, one TAB_FOR(user, id) per line ("*" = everyone).
+//
+// IMPORTANT: once TAB_GRANTS is non-empty, any tab NOT listed is hidden from
+// every non-admin user. Adding a tab to the firmware therefore also means
+// granting it, or nobody but ADMIN_USER will ever see it.
+//
+// Tab ids, as of this build:
+//   keyboard  mouse  macros  media  irdb  learn  control  customedit
+//   keymap    physical keymap editor       (KB_FEATURE_DYNAMIC_KEYMAP)
+//   wifi      WiFi credentials             (ENABLE_AP_MODE)
+//   settings  runtime options              (ENABLE_SETTINGS)
+//
+// AP setup mode ignores this list for the tabs it serves — see the note in
+// src/web.cpp. Recovery must not depend on a list you need a reflash to edit.
 /*     #define TAB_GRANTS \
            TAB_FOR("*",     "keyboard") \
            TAB_FOR("alice", "media")                                         */
@@ -171,10 +301,10 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 // 9000) stays plain TCP. Requires ENABLE_WEB. The build must match:
 //     cmake .. -DENABLE_HTTPS=ON
 // Generate the certificate first with one of:
-//     tools/make-cert-mkcert.sh nethid.example.com        # long-lived, local CA
-//     tools/make-cert-letsencrypt.sh nethid.example.com   # public, Cloudflare DNS-01
+//     tools/cert/make-cert-mkcert.sh nethid.example.com        # long-lived, local CA
+//     tools/cert/make-cert-letsencrypt.sh nethid.example.com   # public, Cloudflare DNS-01
 #ifndef ENABLE_HTTPS
-#define ENABLE_HTTPS    1     // default ON. NOTE: you must still configure with
+#define ENABLE_HTTPS    0     // default ON. NOTE: you must still configure with
                              // -DENABLE_HTTPS=ON so mbedTLS gets linked. To build
                              // a plain-HTTP image, set this to 0 AND omit that flag.
 #endif
@@ -287,6 +417,56 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 // input should start working, at the cost of losing absolute mode.
 #ifndef ENABLE_ABS_MOUSE
 #define ENABLE_ABS_MOUSE 1
+#endif
+
+// How the absolute pointer presents itself to the host. The three forms differ
+// only in the descriptor; the coordinates sent are identical.
+//
+//   2  SEPARATE INTERFACE (default). An ordinary Generic Desktop "Mouse"
+//      collection with absolute 16-bit X/Y, on a HID interface of its own.
+//      This is the shape every virtual machine's "absolute pointing device"
+//      uses (QEMU usb-tablet, VMware, VirtualBox), and hosts drive it with a
+//      NORMAL ARROW CURSOR.
+//
+//      The separate interface is the point. Modes 0 and 1 both put a second
+//      pointer behind the same interface as the relative mouse, and which one
+//      the host binds is then a guess: that ambiguity is what the earlier
+//      attempts kept running into. A host binds each HID interface on its own,
+//      so there is nothing left to guess.
+//
+//   1  DIGITIZER. A Pen collection on the Digitizers usage page. Works on
+//      macOS. On WINDOWS a Pen collection is Windows Ink: the arrow cursor is
+//      replaced by the pen cursor and then hidden altogether between reports.
+//      That is Windows behaving correctly for a pen, not a bug to tune out —
+//      the way to get an arrow back is to stop being a pen. Keep this mode for
+//      a host that turns out to prefer it.
+//
+//   0  LEGACY: absolute X/Y as a second report ID inside the SAME mouse
+//      collection as the relative pointer. Kept because it is the smallest
+//      descriptor, and because it has never had a fair trial — the branch did
+//      not close its mouse collection, so it could not compile, so no build of
+//      it ever reached a device.
+//
+// In digitizer mode only, the web UI sends POSITION on report 3 and CLICKS on
+// the relative mouse (report 2) with a zero movement delta, because digitizer
+// button semantics vary by host. Modes 0 and 2 carry their own buttons.
+//
+// This default used to sit INSIDE the #ifndef ENABLE_ABS_MOUSE block above,
+// which meant passing -DENABLE_ABS_MOUSE=0 skipped it and left the mode
+// undefined here — it only kept working because nethid.h carries its own
+// fallback. Guard each define on itself.
+//
+// Verify what the descriptor actually says with:
+//   python3 tools/check/dump_hid_descriptor.py --all
+#ifndef ABS_MOUSE_MODE
+#define ABS_MOUSE_MODE 2
+#endif
+
+// The old name for mode 1. Left as a hard error rather than an alias: it was in
+// the README and in the diagnostic commands in docs/SETTINGS.md, and silently
+// accepting it would build a descriptor the caller did not ask for.
+#ifdef ABS_MOUSE_DIGITIZER
+#error "ABS_MOUSE_DIGITIZER has been replaced by ABS_MOUSE_MODE (2 = separate interface, 1 = digitizer/Pen, 0 = legacy in-mouse XY)"
 #endif
 
 #define IR_RX_PIN       21      // GP21 = physical pin 27 (receiver OUT)

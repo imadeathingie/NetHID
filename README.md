@@ -1,5 +1,11 @@
 # NetHID C++ — Pico 2 W / Pico SDK
 
+> **Continuing this work?** Read [`docs/`](docs/) first — one file per feature,
+> each covering how it works and what is verified on hardware. Start with
+> [docs/SETTINGS.md](docs/SETTINGS.md): it carries the HID post-mortems, and
+> the reasoning there is the fastest way to understand why the rest is shaped
+> as it is.
+
 USB HID keyboard + mouse over WiFi for the **Raspberry Pi Pico 2 W** (RP2350).
 Full feature parity with the Python version, plus **USB Remote Wakeup**.
 
@@ -42,14 +48,20 @@ keeps the large, frequently-edited markup out of the server logic. Do **not**
 hand-edit the escaped literals — a single mis-escaped backslash or quote
 produces a page that works standalone but breaks when served. Instead:
 
+`NetHID.html` in the repo root **is** that standalone copy and is the source of
+truth — edit it, then regenerate. (The header no longer holds a single
+`MAIN_HTML`: `build_web_html.py` splits the page into `MAIN_HEAD`, one
+`MAIN_TAB_*` per tab and `MAIN_FOOTER`, so the per-user tab permissions can serve
+a subset. Extracting `-n MAIN_HTML` will not find anything.)
+
 ```bash
-# 1. Extract the live UI to a standalone .html file
-python3 tools/cstring_to_html.py include/web_html.h -n MAIN_HTML -o NetHID.html
+# 1. If you need to re-extract a single literal (e.g. the login page)
+python3 tools/web/cstring_to_html.py include/web_html.h -n LOGIN_HTML -o Login.html
 
 # 2. Edit NetHID.html and test it in a browser until it works
 
 # 3. Regenerate the header in one step (rewrites MAIN_HTML, keeps LOGIN_HTML):
-python3 tools/build_web_html.py --main NetHID.html
+python3 tools/web/build_web_html.py --main NetHID.html
 
 # 4. Rebuild + flash.
 ```
@@ -65,7 +77,7 @@ HTTPS is available using letsencrypt. Point the FQDN to your local IP address.
 ```bash
 export CF_Token="your-cloudflare-api-token"
 export CF_Account_ID="your-account-id"
-./tools/make-cert-letsencrypt.sh nethid.example.com
+./tools/cert/make-cert-letsencrypt.sh nethid.example.com
 ```
 
 ## Build
@@ -439,7 +451,108 @@ the build and the source stay in sync. The web UI's IR/RF step types still
 appear in the editor, but the device returns 404 for those endpoints when the
 feature is compiled out.
 
-### Compile-time feature toggles (summary)
+### Physical keyboard (matrix scanning, keymaps, layers)
+
+NetHID can also drive a real key matrix — its own switches, diodes, keymaps
+and QMK-style behaviour — while remaining a network HID device. Both sources
+are merged, so a key held on the matrix is not released by an incoming network
+report and vice versa.
+
+```
+cmake .. -DPICO_BOARD=pico2_w -DKEYBOARD=proto2x2 -DKEYMAP=advanced
+```
+
+Omit `-DKEYBOARD` and nothing changes: no matrix code is compiled and no GPIO
+is claimed.
+
+Boards live under `keyboards/<name>/` (hardware in `keyboard.h`, behaviour in
+`keymaps/<keymap>/keymap.cpp`), exactly the split QMK uses. Features — layers,
+mod-tap/layer-tap, one-shots, combos, caps word, macros — are one file each
+under `src/kb/features/` and are selected per board in `rules.cmake` or
+overridden on the command line. A disabled feature is not compiled, not
+linked, and absent from the dispatch table.
+
+Scanning runs on core 1 next to `hid_task()`, the loop that does nothing but
+USB, so scan timing is unaffected by lwIP or the cyw43 background work.
+
+With `KB_FEATURE_DYNAMIC_KEYMAP` the compiled keymap becomes a default that is
+copied into RAM at boot, and a **KEYMAP** tab appears in the web UI: pick a
+layer, click a key, choose a keycode, and it is live on the next press. Saving
+to flash is a separate, explicit step. No recompile, no reflash, no host
+application — which is the part QMK needs VIA or Vial for.
+
+A board can be **modular**: any number of Picos on one polled serial bus, each
+with its own pins, matrix size and key count. The build emits a minimal firmware
+per module that needs no WiFi or USB and runs on any Pico, while the keymap stays
+a single array. See **[docs/SPLIT.md](docs/SPLIT.md)**.
+
+Development tooling lives under **[tools/](tools/README.md)**, grouped into
+`check/`, `web/`, `keyboard/` and `cert/`. `tools/check/run-all.sh` runs every
+static check and the host test suite in one go.
+
+The web UI can be previewed with no hardware attached — `python3 tools/web/preview.py
+--serve` injects a mock API layer into a copy of the page and serves it locally,
+with console helpers for switching boards and taking modules off the bus.
+
+An **SSD1306/SH1106 status display** can sit on the primary or on any module,
+showing layer, modifiers, link state, WPM and which modules are answering. Only
+changed pages are flushed and never more than one per call, so it cannot stall
+the matrix scan. See **[docs/OLED.md](docs/OLED.md)**.
+
+Rotary encoders get their own pins — two quadrature lines plus a push switch —
+and map per layer to any keycode. Encoders can live on any module. See
+**[docs/ENCODERS.md](docs/ENCODERS.md)**.
+
+**Media keys** — volume, transport, brightness and the browser keys — travel on
+their own Consumer Control report, so they are not keyboard usages and need
+`KB_FEATURE_CONSUMER`. See **[docs/MEDIA_KEYS.md](docs/MEDIA_KEYS.md)**.
+
+An **autoclicker** repeats any keycode at a fixed rate — hold for a burst, or
+double-tap to latch it on. Target, rate and trigger are editable from the web UI
+and persist to flash, so finding a rate you like costs no reflashes. See
+**[docs/AUTOCLICK.md](docs/AUTOCLICK.md)**.
+
+Hold the AP key at boot and NetHID serves its own WiFi network instead of
+joining one, with a captive portal serving the WiFi and keymap tabs —
+so a device that can't reach your router is still configurable without a
+reflash. Provisioned networks are stored in flash and tried ahead of the
+compiled list. See **[docs/AP_MODE.md](docs/AP_MODE.md)**, particularly the
+notes on why it isn't automatic and why that interface is plain HTTP.
+
+A **SETTINGS** tab exposes the `config.h` options that are safe to change at
+runtime — quiet boot, matrix debug logging, tapping term, typing delay, session
+timeouts — persisted to flash, available in both normal and setup mode. See
+**[docs/SETTINGS.md](docs/SETTINGS.md)**, including what is deliberately left
+compile-time and why.
+
+The **login password** can be changed from the device, under the header cog, so
+it does not need to live only in `env.h`. Because a keyboard has no reset hole,
+the stored password is tagged with the build id of the firmware that wrote it
+and is ignored by the next firmware flashed — forgetting it costs a reflash, not
+a board. See **[docs/PASSWORDS.md](docs/PASSWORDS.md)**, including why it is
+stored in plaintext and why setup mode refuses to change it.
+
+Macros for `KB_MACRO(n)` can be built in the same tab — tap, hold, release, text
+and delay steps, stored as verified bytecode and run by a non-blocking
+interpreter on the keyboard itself, so a macro key works with no browser open.
+
+Hold a chosen key while plugging the board in to land in the RP2350 bootloader
+(`KB_FEATURE_BOOTMAGIC`), or put `QK_BOOT` on a layer. The bootmagic check is
+the first thing `main()` does, before USB and WiFi, so a firmware that wedges
+during association is still recoverable without reaching BOOTSEL.
+
+`tools/kbtest/` fakes the GPIO layer and the clock and runs the real pipeline
+on a PC — taps, holds, chords, one-shots and the matrix/network merge are
+asserted byte for byte without flashing anything:
+
+```
+cd tools/kbtest && make && ./kbtest
+```
+
+See **[keyboards/README.md](keyboards/README.md)** for the full layout, pin
+budget, wiring notes and how to add a board.
+
+## Compile-time feature toggles (summary)
 
 Three independent build options, each defaulting ON. Set any to `OFF` at
 configure time to omit that subsystem entirely (its source isn't compiled and
@@ -450,6 +563,21 @@ it's never started):
 | `ENABLE_WEB` | HTTP server on port 80 (web UI + `/api/*`) | `-DENABLE_WEB=OFF` |
 | `ENABLE_TCP` | Raw TCP server on port 9000 (binary + JSON) | `-DENABLE_TCP=OFF` |
 | `ENABLE_REMOTES` | IR blaster + 433 MHz transmit | `-DENABLE_REMOTES=OFF` |
+| `ENABLE_ABS_MOUSE` | absolute pointer (HID report 3) | `-DENABLE_ABS_MOUSE=OFF` |
+
+The absolute pointer's *form* is a separate setting. By default it is an
+ordinary mouse with absolute coordinates on a **HID interface of its own** —
+the shape a virtual machine's "absolute pointing device" uses, which every host
+drives with a normal arrow cursor:
+
+```bash
+cmake .. -DPICO_BOARD=pico2_w -DABS_MOUSE_MODE=1   # digitizer/Pen (Windows: pen cursor)
+cmake .. -DPICO_BOARD=pico2_w -DABS_MOUSE_MODE=0   # legacy, shares the mouse collection
+```
+
+Mode 1 works on macOS but on Windows a Pen collection is Windows Ink: the arrow
+is replaced by a pen cursor and then hidden between reports. See
+[docs/SETTINGS.md](docs/SETTINGS.md) for why the interface is separate.
 
 Example — a minimal web-only build with no TCP socket and no IR/RF:
 

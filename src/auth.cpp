@@ -12,6 +12,7 @@
  */
 
 #include "auth.h"
+#include "auth_store.h"
 #include "config.h"
 #include "pico/stdlib.h"
 #include "pico/sync.h"
@@ -31,6 +32,15 @@ static const nethid_user_t USERS[] = {
 #undef USER
 static const int USER_N = (int)(sizeof(USERS) / sizeof(USERS[0])) - 1;
 
+// Runtime password overrides are indexed by position in this table, so a user
+// past the end of the override array could never change their password — the
+// endpoint would answer "rejected" with nothing to explain it, which is exactly
+// the compiled-out-feature-that-says-nothing failure this project keeps hitting.
+// Fail the build instead; raising AUTH_STORE_MAX_USERS is a one-line change.
+static_assert(sizeof(USERS) / sizeof(USERS[0]) - 1 <= AUTH_STORE_MAX_USERS,
+              "USER_LIST has more users than AUTH_STORE_MAX_USERS — raise it in "
+              "src/auth_store.h, or the last users cannot change their password");
+
 bool auth_is_multiuser(void) { return USER_N > 1; }
 
 // Resolve a username to its entry. NULL/"" -> first user (legacy single-pw).
@@ -39,6 +49,20 @@ static const nethid_user_t *find_user(const char *user) {
     for (int i = 0; i < USER_N; ++i)
         if (strcmp(USERS[i].user, user) == 0) return &USERS[i];
     return NULL;
+}
+
+// The effective password for a user: the runtime override if one is in force,
+// otherwise the one compiled into env.h.
+//
+// Every read of a password goes through here. Three call sites used to reach
+// into `u->password` directly, and adding a fourth path that forgot to would
+// mean a changed password that works for plaintext login but not for
+// challenge-response, or the reverse — a half-changed password is worse than
+// one that did not change.
+static const char *user_password(const nethid_user_t *u) {
+    if (!u) return "";
+    const char *ov = auth_store_password((int)(u - USERS));
+    return ov ? ov : (u->password ? u->password : "");
 }
 
 int auth_user_index(const char *user) {
@@ -136,9 +160,11 @@ void auth_init(void) {
 }
 
 bool auth_is_enabled(void) {
-    // Enabled if any configured user has a non-empty password.
+    // Enabled if any configured user has a non-empty EFFECTIVE password. A user
+    // whose compiled password is "" but who has set one from the web UI counts,
+    // which is the only way to turn auth on without a reflash.
     for (int i = 0; i < USER_N; ++i)
-        if (USERS[i].password && USERS[i].password[0] != '\0') return true;
+        if (user_password(&USERS[i])[0] != '\0') return true;
     return false;
 }
 
@@ -220,7 +246,8 @@ auth_result_t auth_authenticate(const char *user, const char *password,
     }
 
     const nethid_user_t *u = find_user(user);
-    if (u && u->password[0] != '\0' && strcmp(password, u->password) == 0) {
+    const char *pw = user_password(u);
+    if (u && pw[0] != '\0' && strcmp(password, pw) == 0) {
         _on_success(n);
         spin_unlock(s.lock, irq);
         printf("[auth] Authenticated (plaintext) as '%s'\n", u->user);
@@ -299,10 +326,11 @@ auth_result_t auth_respond(const char *user, const char *nonce_hex,
     bool nonce_ok = _consume_challenge(nonce_hex, n);   // single-use, even on fail
     const nethid_user_t *u = find_user(user);
 
+    const char *pw = user_password(u);
     bool ok = false;
-    if (nonce_ok && u && u->password[0] != '\0') {
+    if (nonce_ok && u && pw[0] != '\0') {
         char expected[65];
-        hmac_sha256_hex((const uint8_t *)u->password, strlen(u->password),
+        hmac_sha256_hex((const uint8_t *)pw, strlen(pw),
                         (const uint8_t *)nonce_hex, strlen(nonce_hex), expected);
         ok = ct_equal_hex(expected, response_hex, 64);
     }
@@ -406,6 +434,19 @@ void auth_invalidate_token(const char *token) {
         }
     }
     spin_unlock(s.lock, irq);
+}
+
+int auth_invalidate_user_tokens(int user_idx, const char *keep) {
+    int killed = 0;
+    uint32_t irq = spin_lock_blocking(s.lock);
+    for (int i = 0; i < MAX_TOKENS; i++) {
+        if (!s.tokens[i].used || s.tokens[i].user_idx != user_idx) continue;
+        if (keep && keep[0] && strcmp(s.tokens[i].token, keep) == 0) continue;
+        s.tokens[i].used = false;
+        killed++;
+    }
+    spin_unlock(s.lock, irq);
+    return killed;
 }
 
 void auth_get_status(auth_status_t *out) {

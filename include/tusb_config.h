@@ -21,8 +21,24 @@
 // ── Device ───────────────────────────────────────────────────────────────────
 #define CFG_TUD_ENABLED         1
 
-// One composite HID interface (keyboard Report ID 1 + mouse Report ID 2)
+// One composite HID interface (keyboard Report ID 1 + mouse Report ID 2), plus
+// a second one for the absolute pointer in ABS_MOUSE_MODE 2.
+//
+// Deliberately derived from the same macro the descriptor uses rather than set
+// by hand: this number sizes TinyUSB's per-instance state, so a descriptor that
+// declares two interfaces while this says one enumerates and then drops every
+// report on the second. Both come from CMake, so they cannot disagree.
+#ifndef ABS_MOUSE_MODE
+#define ABS_MOUSE_MODE 2
+#endif
+#ifndef ENABLE_ABS_MOUSE
+#define ENABLE_ABS_MOUSE 1
+#endif
+#if ENABLE_ABS_MOUSE && ABS_MOUSE_MODE == 2
+#define CFG_TUD_HID             2
+#else
 #define CFG_TUD_HID             1
+#endif
 #define CFG_TUD_HID_EP_BUFSIZE  64
 
 // Disable everything we don't use
