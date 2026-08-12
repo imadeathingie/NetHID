@@ -126,6 +126,41 @@ async function run(label, features, checks, opts) {
       search.value = 'autoclick'; w.kmFilter();
       ok(opts.filter(b => b.style.display !== 'none').map(b => b.textContent).includes('AUTO1'),
          'searching "autoclick" finds AUTO1');
+
+      // Punctuation by the character it prints, not by its four-letter name.
+      // Typing ";" used to match nothing at all: the searchable text was the
+      // name plus the group's keywords, and neither contains a ";".
+      const seek = q => {
+        search.value = q; w.kmFilter();
+        return opts.filter(b => b.style.display !== 'none').map(b => b.textContent);
+      };
+      const finds = (q, name) => ok(seek(q).includes(name),
+        'searching ' + JSON.stringify(q) + ' finds ' + name);
+      finds(';', 'SCLN');
+      finds(':', 'SCLN');          // the shifted face points at the same key
+      finds('.', 'DOT');
+      finds('.', 'PDOT');          // and at the keypad's own period
+      finds(',', 'COMM');
+      finds('/', 'SLSH');
+      finds('/', 'PSLS');
+      finds('\\', 'BSLS');
+      finds('[', 'LBRC');
+      finds('!', '1');             // shifted number row
+      finds('*', 'PAST');
+      finds('comma', 'COMM');      // and by the name you say out loud
+      finds('semicolon', 'SCLN');
+      finds('backslash', 'BSLS');
+      finds('asterisk', 'PAST');
+
+      // A character must not drag in everything that merely mentions it in a
+      // group keyword — "-" once matched the whole INTERNATIONAL group,
+      // through the hyphen in "non-us".
+      const dash = seek('-');
+      ok(dash.includes('MINS') && dash.includes('PMNS'),
+         'searching "-" finds MINS and PMNS');
+      ok(!dash.includes('KANA') && !dash.includes('HANJ'),
+         'searching "-" does not drag in the international group');
+
       search.value = ''; w.kmFilter();
 
       // Slot range is clamped to what the board declared.

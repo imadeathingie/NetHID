@@ -1351,7 +1351,7 @@
       <div class="km-ptitle" id="kmPickTitle">key</div>
       <button class="km-x" onclick="kmPickClose()" title="close (Esc)">&times;</button>
     </div>
-    <input class="km-search" id="kmSearch" placeholder="search: a, f5, left, lsft, enter…" oninput="kmFilter()">
+    <input class="km-search" id="kmSearch" placeholder="search: a, f5, left, lsft, ; . / comma…" oninput="kmFilter()">
     <div class="km-list" id="kmList"></div>
     <div class="km-adv">
       <div class="km-row">
@@ -1481,9 +1481,45 @@ const KC_GROUPS = [
   ['EDIT & SYSTEM', 'undo cut copy paste find again select stop execute help menu power volume mute',
    ['UNDO','CUT','COPY','PSTE','FIND','AGIN','SLCT','STOP','EXEC','HELP',
     'MENU','APP','KB_POWER','KB_MUTE','KB_VOLU','KB_VOLD']],
-  ['INTERNATIONAL', 'international iso jis japanese korean hangul hanja yen kana henkan muhenkan non-us',
+  // "non us" and not "non-us": a hyphen here would answer a search for "-",
+  // which is MINS, with the whole international group.
+  ['INTERNATIONAL', 'international iso jis japanese korean hangul hanja yen kana henkan muhenkan non us',
    ['NUHS','NUBS','RO','KANA','JYEN','HENK','MHEN','HAEN','HANJ']],
 ];
+
+// What a key PRINTS, and what people call it out loud — so the picker can be
+// searched by the character instead of by a four-letter name nobody memorises.
+// ";" finds SCLN, "." finds DOT and PDOT, "!" finds 1, "comma" finds COMM.
+//
+// Both faces of the key are listed, so ":" also lands on SCLN. That is the key
+// you shift to get a colon, and pointing at it beats finding nothing — the
+// picker assigns the plain keycode, and shift is yours to add (MODS, or the
+// Shift key at type time).
+//
+// US layout, deliberately. A usage is a POSITION on the board, not a
+// character, so on an AZERTY or JIS host these glyphs are wrong — but so are
+// the names, which were only ever US mnemonics too.
+const KC_SEARCH = {
+  MINS:'- _ minus dash hyphen underscore', EQL:'= + equals plus',
+  LBRC:'[ { bracket open square brace',    RBRC:'] } bracket close square brace',
+  BSLS:'\\ | backslash pipe bar',          SCLN:'; : semicolon colon',
+  QUOT:'\' " quote apostrophe single double', GRV:'` ~ grave backtick tilde',
+  COMM:', < comma angle less than',        DOT:'. > period full stop dot angle greater than',
+  SLSH:'/ ? slash question mark',
+  // The shifted face of the number row. The unshifted one is the name.
+  1:'! exclamation bang', 2:'@ at sign', 3:'# hash pound number sign',
+  4:'$ dollar', 5:'% percent', 6:'^ caret circumflex hat',
+  7:'& ampersand', 8:'* asterisk star', 9:'( paren open parenthesis round',
+  0:') paren close parenthesis round',
+  SPC:'space bar', ENT:'enter return', ESC:'escape', BSPC:'backspace delete',
+  // The keypad prints these unshifted — its asterisk is not shift-8.
+  PSLS:'/ slash divide', PAST:'* asterisk star multiply times',
+  PMNS:'- minus dash subtract', PPLS:'+ plus add',
+  PEQL:'= equals', PCMM:', comma', PDOT:'. period dot decimal point',
+  // Named after a region rather than after anything on the keycap.
+  NUHS:'# ~ hash tilde', NUBS:'\\ | backslash pipe', JYEN:'¥ yen', RO:'\\ _',
+};
+
 const KC_NAME = {};
 Object.keys(KC).forEach(n => { if (KC_NAME[KC[n]] === undefined) KC_NAME[KC[n]] = n; });
 
@@ -1949,8 +1985,10 @@ function kmBuildList() {
       b.className = 'km-opt' + (cls ? ' ' + cls : '');
       b.textContent = n;
       // Searchable by the words someone would actually type. "autoclick" and
-      // "click" find AUTO0 even though the label says neither.
-      b.dataset.name = (n + ' ' + (keywords || '')).toLowerCase();
+      // "click" find AUTO0 even though the label says neither, and ";" finds
+      // SCLN even though nothing on screen says ";".
+      b.dataset.name = (n + ' ' + (KC_SEARCH[n] || '') + ' ' +
+                        (keywords || '')).toLowerCase();
       b.onclick = () => kmApply(table[n]);
       list.appendChild(b);
     });
