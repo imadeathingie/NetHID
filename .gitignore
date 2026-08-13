@@ -32,6 +32,23 @@ preview.html
 __pycache__/
 *.pyc
 
+# Host-test binaries. `make check` in tools/kbtest builds these from source
+# every time and `make clean` deletes them; they are outputs, not the tests.
+# Named individually rather than by pattern: the tests have no extension, so
+# anything broad enough to catch them also catches the shell scripts next door.
+tools/kbtest/kbtest
+tools/kbtest/kbtest.dSYM/
+tools/kbtest/layout_check
+tools/kbtest/layout_test
+tools/kbtest/settings_test
+tools/kbtest/typer_test
+tools/kbtest/split_test
+tools/kbtest/encoder_test
+tools/kbtest/encmap_test
+tools/kbtest/autoclick_test
+tools/kbtest/oled_test
+tools/kbtest/auth_store_test
+
 # jsdom, for the web-UI checks only (npm i jsdom). run-all.sh skips those
 # checks cleanly when it is absent, so this is never required to build.
 node_modules/
