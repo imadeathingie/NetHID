@@ -19,6 +19,8 @@ it happened to be the first time you pressed Save. Fields you have set show as
 | `lockout_s` | `LOCKOUT_S` | lockout after failed logins |
 | `max_auth_attempts` | `MAX_AUTH_ATTEMPTS` | failed logins before lockout |
 | `tapping_term_ms` | `TAPPING_TERM` | dual-role hold threshold |
+| `autoclick_ms` | (0) | autoclick interval override; 0 uses each slot's own rate |
+| `keyboard_layout` | `KEYBOARD_LAYOUT` | which layout the **host** is set to — see [Keyboard layout](#keyboard-layout) |
 
 `debug_matrix` and `tapping_term_ms` are the two that change the loop most:
 working out a matrix and finding a tapping term that feels right are both
@@ -51,6 +53,20 @@ One row in the `FIELDS` table in `src/settings.cpp`:
 F("my_option", T_U16, my_option, 1, 500, MY_OPTION_DEFAULT, "What it does")
 ```
 
+A field with a fixed set of named choices uses `FE` instead, and the page
+renders a list rather than a number box — "keyboard_layout: 1" is not a
+question anyone can answer:
+
+```c
+FE("my_choice", my_choice, N_CHOICES - 1, DEFAULT_CHOICE, CHOICE_NAMES,
+   "What it does")
+```
+
+`CHOICE_NAMES` is a `NULL`-terminated `const char *const []`. Help text is
+printed into JSON with no escaping, so it must contain no quotes or
+backslashes; `check_layout_tables.py` enforces that, because an unescaped one
+makes the whole settings page fail to parse and render nothing at all.
+
 plus the struct member in `settings.h`. That table drives the default, the
 range, the setter, the override bit and the JSON the page renders from, so
 there is no second place to forget.
@@ -58,6 +74,59 @@ there is no second place to forget.
 Bump `SETTINGS_VERSION` if you change or remove an existing field. Adding one is
 already handled: the blob records its field count and falls back to defaults on
 a mismatch rather than reinterpreting old bytes as new fields.
+
+## Keyboard layout
+
+A HID usage is a **position on the board, not a character**. Usage `0x1F` means
+"the second key on the number row"; whether shifting it gives you `@` or `"` is
+decided entirely by the layout the host has selected, and the device is never
+told which that is. It cannot be detected: USB does not carry it, and the host
+applies it after the report arrives.
+
+So the device has to assume one, and it assumed US ANSI everywhere. On a host
+set to **British**, six printable ASCII characters therefore came out as
+something else — in both directions, which is what makes it so confusing:
+
+| you ask for | US ANSI sends | a UK host shows you |
+| --- | --- | --- |
+| `@` | shift-2 | `"` |
+| `"` | shift-apostrophe | `@` |
+| `#` | shift-3 | `£` |
+| `~` | shift-grave | `¬` |
+| `\` | usage `0x31` | `#` |
+| `\|` | shift + `0x31` | `~` |
+
+Set `keyboard_layout` to **UK** and the typer uses the British positions
+instead: `@` on shift-apostrophe, `#` on the ISO key beside Enter (`0x32`), a
+backslash on the ISO key beside left Shift (`0x64`). Everything else — the
+brackets, the semicolon, the comma/period/slash cluster, the rest of the number
+row — is identical on both layouts and is deliberately not duplicated.
+
+This affects everything the device **types**: the web UI's type box, macro
+`TEXT` opcodes, boot diagnostics and the AP-mode instructions. It does **not**
+affect keys you map in the keymap editor — those send a position, and the host
+decides what it means, which is the correct behaviour and the reason the
+setting exists at all.
+
+The keymap editor reads the same setting. Each key in the keycode picker shows
+what it prints under the active layout, and you can search by that character:
+under UK, typing `@` into the picker's search box offers `QUOT` and not `2`.
+
+> **The ANSI backslash key.** An ISO board does not have usage `0x31` at all,
+> and Windows maps it to the same scan code as the ISO hash key — so under UK
+> that key does not fail to type a backslash, it types a `#`. The picker shows
+> it as `# ~` for that reason, and does not offer it when you search for a
+> backslash.
+
+`config.h`'s `KEYBOARD_LAYOUT` is only the compiled default; the setting
+overrides it and survives a reboot. A build with `ENABLE_SETTINGS=OFF` uses the
+`config.h` value and nothing else.
+
+Adding a layout means a row in `hid_layout_t`, a name in `HID_LAYOUT_NAMES`, a
+delta table in `src/hid_layout.cpp` and a face table in `NetHID.html`.
+`tools/check/check_layout_tables.py` will not let those drift apart: when the
+picker says one key prints `@` and the typer presses another, both sides are
+confidently wrong in opposite directions and nothing logs a thing.
 
 ## Boot keys
 

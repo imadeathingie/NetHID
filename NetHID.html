@@ -1271,6 +1271,10 @@
   .km-opt{padding:4px 8px;border-radius:4px;border:1px solid #34343c;background:#20202a;
           color:#ddd;font:600 11px/1 ui-monospace,monospace;cursor:pointer}
   .km-opt:hover{border-color:#2f6fd0}
+  /* What the key prints under the active layout. Dim and small: it is a hint
+     about the key, not the name you assign. */
+  .km-face{display:block;margin-top:3px;font-weight:400;font-size:10px;
+           letter-spacing:1px;opacity:.6}
   .km-adv{border-top:1px solid #2c2c34;padding-top:10px;display:grid;gap:7px}
   .km-row{display:flex;flex-wrap:wrap;gap:7px;align-items:center;font-size:12px}
   .km-row select,.km-row input[type=number]{padding:5px;border-radius:4px;
@@ -1489,36 +1493,72 @@ const KC_GROUPS = [
 
 // What a key PRINTS, and what people call it out loud — so the picker can be
 // searched by the character instead of by a four-letter name nobody memorises.
-// ";" finds SCLN, "." finds DOT and PDOT, "!" finds 1, "comma" finds COMM.
+// ";" finds SCLN, "." finds DOT and PDOT, "!" finds 1, "comma" finds COMM. The
+// printed face is also drawn under the name, so you can SEE which key is which
+// without searching at all.
 //
-// Both faces of the key are listed, so ":" also lands on SCLN. That is the key
-// you shift to get a colon, and pointing at it beats finding nothing — the
-// picker assigns the plain keycode, and shift is yours to add (MODS, or the
-// Shift key at type time).
+// Each entry is [what the key prints, other words that should find it]. Both
+// faces are listed, so ":" also lands on SCLN — that is the key you shift to
+// get a colon, and pointing at it beats finding nothing. The picker assigns
+// the plain keycode; shift is yours to add (MODS, or the Shift key at type
+// time).
 //
-// US layout, deliberately. A usage is a POSITION on the board, not a
-// character, so on an AZERTY or JIS host these glyphs are wrong — but so are
-// the names, which were only ever US mnemonics too.
-const KC_SEARCH = {
-  MINS:'- _ minus dash hyphen underscore', EQL:'= + equals plus',
-  LBRC:'[ { bracket open square brace',    RBRC:'] } bracket close square brace',
-  BSLS:'\\ | backslash pipe bar',          SCLN:'; : semicolon colon',
-  QUOT:'\' " quote apostrophe single double', GRV:'` ~ grave backtick tilde',
-  COMM:', < comma angle less than',        DOT:'. > period full stop dot angle greater than',
-  SLSH:'/ ? slash question mark',
+// ── Why this is per-layout ──────────────────────────────────────────────────
+// A usage is a POSITION on the board, not a character. Usage 0x1F is "second
+// key on the number row"; whether shifting it gives you @ or " is decided by
+// the host's layout, which the device is never told. So is the answer to "which
+// key types a backslash". The firmware has the same problem and solves it the
+// same way — one setting, read by both. See include/hid_layout.h.
+const KC_FACE_US = {
+  MINS:['- _','minus dash hyphen underscore'], EQL:['= +','equals plus'],
+  LBRC:['[ {','bracket open square brace'],    RBRC:['] }','bracket close square brace'],
+  BSLS:['\\ |','backslash pipe bar'],          SCLN:['; :','semicolon colon'],
+  QUOT:['\' "','quote apostrophe single double'], GRV:['` ~','grave backtick tilde'],
+  COMM:[', <','comma angle less than'],        DOT:['. >','period full stop dot angle greater than'],
+  SLSH:['/ ?','slash question mark'],
   // The shifted face of the number row. The unshifted one is the name.
-  1:'! exclamation bang', 2:'@ at sign', 3:'# hash pound number sign',
-  4:'$ dollar', 5:'% percent', 6:'^ caret circumflex hat',
-  7:'& ampersand', 8:'* asterisk star', 9:'( paren open parenthesis round',
-  0:') paren close parenthesis round',
-  SPC:'space bar', ENT:'enter return', ESC:'escape', BSPC:'backspace delete',
+  1:['1 !','exclamation bang'], 2:['2 @','at sign'], 3:['3 #','hash pound number sign'],
+  4:['4 $','dollar'], 5:['5 %','percent'], 6:['6 ^','caret circumflex hat'],
+  7:['7 &','ampersand'], 8:['8 *','asterisk star'], 9:['9 (','paren open parenthesis round'],
+  0:['0 )','paren close parenthesis round'],
+  SPC:['','space bar'], ENT:['','enter return'], ESC:['','escape'],
+  BSPC:['','backspace delete'],
   // The keypad prints these unshifted — its asterisk is not shift-8.
-  PSLS:'/ slash divide', PAST:'* asterisk star multiply times',
-  PMNS:'- minus dash subtract', PPLS:'+ plus add',
-  PEQL:'= equals', PCMM:', comma', PDOT:'. period dot decimal point',
-  // Named after a region rather than after anything on the keycap.
-  NUHS:'# ~ hash tilde', NUBS:'\\ | backslash pipe', JYEN:'¥ yen', RO:'\\ _',
+  PSLS:['/','slash divide'], PAST:['*','asterisk star multiply times'],
+  PMNS:['-','minus dash subtract'], PPLS:['+','plus add'],
+  PEQL:['=','equals'], PCMM:[',','comma'], PDOT:['.','period dot decimal point'],
+  // Named after a region rather than after anything on the keycap. On a US
+  // board these two keys are not present at all, hence the bare names.
+  NUHS:['# ~','hash tilde iso'], NUBS:['\\ |','backslash pipe iso'],
+  JYEN:['¥','yen'], RO:['\\ _','ro'],
 };
+
+// British ISO, as Windows and Linux map it. A delta over the US table — the
+// brackets, semicolon, comma/period/slash and most of the number row are
+// identical, and repeating them here would be four differences buried in
+// thirty lines that can rot on their own.
+const KC_FACE_UK = {
+  2:['2 "','quote double'],          // @ is not here on UK
+  3:['3 £','pound sterling'],        // and neither is #
+  QUOT:['\' @','quote apostrophe at sign'],
+  GRV:['` ¬','grave backtick not negation'],   // ~ is not here either
+  NUHS:['# ~','hash tilde'],         // a real key on an ISO board, beside Enter
+  NUBS:['\\ |','backslash pipe'],    // and beside left Shift
+  // The ANSI backslash key does not exist on an ISO board, and Windows maps
+  // its usage to the same scan code as the ISO hash key — so on UK it does not
+  // fail to type a backslash, it types a # instead. Deliberately not
+  // advertising "\" here, or a search for one would offer two keys and only
+  // one of them works.
+  BSLS:['# ~','ansi backslash key'],
+};
+
+// The active table. Merged rather than switched, so a key the UK delta does
+// not mention keeps its US face instead of losing its glyphs entirely.
+let KC_LAYOUT = 0;
+function kcFaces() {
+  if (KC_LAYOUT !== 1) return KC_FACE_US;
+  return Object.assign({}, KC_FACE_US, KC_FACE_UK);
+}
 
 const KC_NAME = {};
 Object.keys(KC).forEach(n => { if (KC_NAME[KC[n]] === undefined) KC_NAME[KC[n]] = n; });
@@ -1583,6 +1623,10 @@ async function kmLoad(force) {
   const prevBoard = kmInfo && kmInfo.board;
   kmInfo = info;
   kmModules = (info.modules && info.modules.length > 1) ? info.modules : null;
+  // Which glyphs the picker draws and searches. An older firmware sends no
+  // `layout` at all, and US is what it was assuming anyway, so the absence is
+  // an accurate answer rather than a missing one.
+  KC_LAYOUT = info.layout | 0;
 
   // Everything below describes THIS board. Carried over from the last one it is
   // not merely stale, it is wrong: a module selection naming a module that no
@@ -1975,6 +2019,7 @@ function kmAutoclickSlots() {
 function kmBuildList() {
   const list = document.getElementById('kmList');
   list.innerHTML = '';
+  const faces = kcFaces();
   const group = (label, table, cls, keywords) => {
     if (!Object.keys(table).length) return;
     const h = document.createElement('div');
@@ -1984,10 +2029,23 @@ function kmBuildList() {
       const b = document.createElement('button');
       b.className = 'km-opt' + (cls ? ' ' + cls : '');
       b.textContent = n;
+      // The keycode name, kept out of textContent's way: the printed face is
+      // appended below it, so textContent is "SCLN; :" and no longer answers
+      // "which key is this".
+      b.dataset.kc = n;
+      const [face, words] = faces[n] || ['', ''];
+      // What the key prints under the current layout, drawn under the name.
+      // This is the whole answer to "which one of these types an @" — on UK
+      // it is not the one called 2.
+      if (face) {
+        const f = document.createElement('span');
+        f.className = 'km-face'; f.textContent = face;
+        b.appendChild(f);
+      }
       // Searchable by the words someone would actually type. "autoclick" and
       // "click" find AUTO0 even though the label says neither, and ";" finds
       // SCLN even though nothing on screen says ";".
-      b.dataset.name = (n + ' ' + (KC_SEARCH[n] || '') + ' ' +
+      b.dataset.name = (n + ' ' + face + ' ' + words + ' ' +
                         (keywords || '')).toLowerCase();
       b.onclick = () => kmApply(table[n]);
       list.appendChild(b);
@@ -2943,6 +3001,14 @@ async function stLoad() {
   // Rendered from whatever the firmware reports, so this page never drifts out
   // of step with the table in settings.cpp.
   j.fields.forEach(fd => list.appendChild(stRow(fd)));
+
+  // The response is built into a fixed buffer, and running out of room used to
+  // drop the remaining fields while still looking like a complete answer — a
+  // setting would simply not be on the page, with nothing saying why.
+  if (j.truncated)
+    logMsg('settings: firmware could only send ' + j.count + ' of ' + j.total +
+           ' fields — the rest are missing from this page, not from the device',
+           'err');
 }
 
 function stRow(fd) {
@@ -2959,6 +3025,17 @@ function stRow(fd) {
     input.type = 'checkbox';
     input.checked = !!fd.value;
     input.onchange = () => stSet(fd.name, input.checked ? 1 : 0);
+  } else if (fd.type === 'enum' && fd.options) {
+    // A number box for a choice is unanswerable without reading the source:
+    // "keyboard_layout: 1" means nothing to the person it is asking.
+    input = document.createElement('select');
+    fd.options.forEach((name, i) => {
+      const o = document.createElement('option');
+      o.value = i; o.textContent = name;
+      input.appendChild(o);
+    });
+    input.value = fd.value;
+    input.onchange = () => stSet(fd.name, parseInt(input.value));
   } else {
     input = document.createElement('input');
     input.type = 'number';
@@ -2980,9 +3057,11 @@ function stRow(fd) {
   row.appendChild(h);
 
   const d = document.createElement('span');
+  const dflt = (fd.type === 'enum' && fd.options && fd.options[fd.default] !== undefined)
+             ? fd.options[fd.default] : fd.default;
   if (fd.overridden) {
     d.className = 'st-ovr';
-    d.textContent = 'set (default ' + fd.default + ')';
+    d.textContent = 'set (default ' + dflt + ')';
   } else {
     d.className = 'st-def';
     d.textContent = 'default';
@@ -3001,6 +3080,10 @@ function stRow(fd) {
 async function stSet(field, value) {
   if (!await api('/api/settings', { field: field, value: value })) return;
   await stLoad();
+  // The keymap editor draws and searches by what each key PRINTS, which the
+  // layout decides. Without this the picker keeps showing the old layout's
+  // glyphs until something else happens to reload the keymap tab.
+  if (field === 'keyboard_layout' && kmLoaded) await kmLoad(true);
 }
 
 async function stReset(field) {

@@ -34,18 +34,30 @@ layout_check: layout_check.cpp $(ROOT)/keyboards/$(KB)/keyboard.h
 	    -I$(ROOT)/keyboards/$(KB) layout_check.cpp -o $@
 
 # Settings store: defaults, ranges, override tracking, persistence.
-settings_test: settings_test.cpp harness.cpp $(ROOT)/src/settings.cpp
+settings_test: settings_test.cpp harness.cpp $(ROOT)/src/settings.cpp $(ROOT)/src/hid_layout.cpp
 	g++ -std=c++17 -O0 -Wall -Wextra -Istubs -I$(ROOT)/include \
 	    -I$(ROOT)/keyboards/$(KB) -DENABLE_SETTINGS=1 -DENABLE_AP_MODE=1 \
 	    -DENABLE_KEYBOARD=1 -DWIFI_NETWORK_LIST='WIFI("a","b",0)' \
-	    harness.cpp settings_test.cpp $(ROOT)/src/settings.cpp -o $@
+	    harness.cpp settings_test.cpp $(ROOT)/src/settings.cpp \
+	    $(ROOT)/src/hid_layout.cpp -o $@
+
+# What the device will actually type, per layout. Links the real settings store
+# so the layout can be switched the way the web UI switches it.
+layout_test: layout_test.cpp harness.cpp $(ROOT)/src/hid.cpp $(ROOT)/src/hid_layout.cpp $(ROOT)/src/settings.cpp
+	g++ -std=c++17 -O0 -Wall -Wextra -Istubs -I$(ROOT)/include \
+	    -I$(ROOT)/keyboards/$(KB) -DENABLE_KEYBOARD=0 -DENABLE_SETTINGS=1 \
+	    -DENABLE_AP_MODE=1 -DHARNESS_REAL_HID=1 \
+	    -DWIFI_NETWORK_LIST='WIFI("a","b",0)' \
+	    harness.cpp layout_test.cpp $(ROOT)/src/hid.cpp \
+	    $(ROOT)/src/hid_layout.cpp $(ROOT)/src/settings.cpp -o $@
 
 # String typer against a deliberately flaky USB endpoint.
-typer_test: typer_test.cpp harness.cpp $(ROOT)/src/hid.cpp
+typer_test: typer_test.cpp harness.cpp $(ROOT)/src/hid.cpp $(ROOT)/src/hid_layout.cpp
 	g++ -std=c++17 -O0 -Wall -Wextra -Istubs -I$(ROOT)/include \
 	    -I$(ROOT)/keyboards/$(KB) -DENABLE_KEYBOARD=0 -DENABLE_SETTINGS=0 -DHARNESS_REAL_HID=1 \
 	    -DWIFI_NETWORK_LIST='WIFI("a","b",0)' \
-	    harness.cpp typer_test.cpp $(ROOT)/src/hid.cpp -o $@
+	    harness.cpp typer_test.cpp $(ROOT)/src/hid.cpp \
+	    $(ROOT)/src/hid_layout.cpp -o $@
 
 # Split link, over a deliberately bad wire. Needs a split board definition.
 split_test: split_test.cpp harness.cpp $(ROOT)/src/split/split_uart.cpp $(ROOT)/src/split/split_primary.cpp
@@ -106,11 +118,11 @@ oled_test: oled_test.cpp harness.cpp $(ROOT)/src/oled/oled.cpp
 	    $(ROOT)/src/oled/oled_status.cpp $(ROOT)/src/oled/kb_status.cpp -o $@
 
 # Everything that runs on a host.
-check: kbtest settings_test typer_test split_test encoder_test oled_test encmap_test autoclick_test auth_store_test
+check: kbtest settings_test layout_test typer_test split_test encoder_test oled_test encmap_test autoclick_test auth_store_test
 	./kbtest && ./settings_test && ./typer_test && ./split_test && \
 	./encoder_test && ./oled_test && ./encmap_test && ./autoclick_test && \
 	./auth_store_test
 
 clean:
-	rm -f kbtest layout_check settings_test typer_test split_test encoder_test encmap_test autoclick_test oled_test
+	rm -f kbtest layout_check layout_test settings_test typer_test split_test encoder_test encmap_test autoclick_test oled_test
 .PHONY: clean check

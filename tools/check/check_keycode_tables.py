@@ -103,18 +103,28 @@ def page_groups():
 
 
 def page_search():
-    """KC_SEARCH: name -> the glyphs and words that also find it.
+    """KC_FACE_*: name -> everything that should find that key.
 
-    A name in here that is not in KC is a typo, and a typo is invisible: the
-    lookup misses, the key keeps its bare name, and searching for ";" quietly
-    finds nothing — exactly the state this table was added to fix.
+    Each entry is [what the key prints, other words]; both are searchable, so
+    this flattens them. A name in here that is not in KC is a typo, and a typo
+    is invisible: the lookup misses, the key keeps its bare name, and searching
+    for ";" quietly finds nothing — the state these tables were added to fix.
+
+    check_layout_tables.py is what holds the FACES to the firmware. This only
+    cares that the names are real.
     """
     js = open(HTML, encoding="utf-8").read()
-    m = re.search(r"const KC_SEARCH = \{(.*?)\n\};", js, re.S)
-    if not m:
-        return None
-    body = re.sub(r"//[^\n]*", "", m.group(1))
-    return dict(re.findall(r"(\w+)\s*:\s*'((?:[^'\\]|\\.)*)'", body))
+    out = {}
+    for table in ("KC_FACE_US", "KC_FACE_UK"):
+        m = re.search(r"const %s = \{(.*?)\n\};" % table, js, re.S)
+        if not m:
+            return None
+        body = re.sub(r"//[^\n]*", "", m.group(1))
+        for name, face, words in re.findall(
+                r"(\w+)\s*:\s*\[\s*'((?:[^'\\]|\\.)*)'\s*,\s*'((?:[^'\\]|\\.)*)'\s*\]",
+                body):
+            out[name] = out.get(name, "") + " " + face + " " + words
+    return out
 
 
 def main() -> int:
@@ -164,13 +174,14 @@ def main() -> int:
     # A search alias for a key that does not exist is dead weight nobody sees.
     search = page_search()
     if search is None:
-        bad.append("KC_SEARCH not found in NetHID.html — punctuation and word "
-                   "aliases are gone, or the table was renamed")
+        bad.append("KC_FACE_US / KC_FACE_UK not found in NetHID.html — "
+                   "punctuation and word aliases are gone, or a table was "
+                   "renamed")
     else:
         for n in sorted(search):
             if n not in page:
-                bad.append("KC_SEARCH has an entry for %s, which is not in KC "
-                           "— that alias can never match anything" % n)
+                bad.append("a face table has an entry for %s, which is not in "
+                           "KC — it can never be shown or matched" % n)
         # The complaint that produced the table: you cannot search by the
         # character the key prints. Assert the characters are actually there.
         for n, ch in (("SCLN", ";"), ("DOT", "."), ("COMM", ","),
@@ -178,8 +189,8 @@ def main() -> int:
                       ("EQL", "="), ("GRV", "`"), ("LBRC", "["),
                       ("RBRC", "]"), ("BSLS", "\\\\")):
             if ch not in search.get(n, ""):
-                bad.append("KC_SEARCH[%s] does not contain %r — searching the "
-                           "picker for that character finds nothing" % (n, ch))
+                bad.append("no face table puts %r on %s — searching the picker "
+                           "for that character finds nothing" % (ch, n))
 
     # A group listing a name that does not exist silently shows nothing.
     groups = page_groups()

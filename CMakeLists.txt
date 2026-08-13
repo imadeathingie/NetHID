@@ -63,6 +63,7 @@ endif()
 add_executable(nethid
     src/main.cpp
     src/hid.cpp
+    src/hid_layout.cpp
     src/auth.cpp
     src/auth_store.cpp
     src/hmac_sha256.cpp

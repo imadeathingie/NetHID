@@ -343,6 +343,17 @@ static const wifi_network_t WIFI_NETWORKS[] = {
 // Milliseconds between keystrokes when sending a string.
 #define TYPE_DELAY_MS   8
 
+// Which keyboard layout the HOST is set to. A HID usage is a position on the
+// board, not a character, so the device has to assume a layout before it can
+// type "@" — and it cannot detect which one, because USB never carries it.
+//
+//   0 = US ANSI      1 = UK ISO (British, as Windows and Linux map it)
+//
+// Wrong value, and six characters come out as something else: @ " # ~ \ |.
+// Changeable at runtime from the settings page; this is only the default.
+// See include/hid_layout.h for what actually differs.
+#define KEYBOARD_LAYOUT 0
+
 // QUIET_BOOT: set to 1 to suppress ALL boot-time typing onto the host —
 // both the progress/diagnostic lines and the usage synopsis. Useful once
 // your setup is stable and you already know the IP. Diagnostics still go to

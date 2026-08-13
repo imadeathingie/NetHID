@@ -33,6 +33,7 @@ run quiet-boot   python3 tools/check/check_quiet_boot.py
 run ap-allowlist python3 tools/check/check_ap_allowlist.py
 run pins         python3 tools/check/check_pins.py
 run keycodes     python3 tools/check/check_keycode_tables.py
+run layouts      python3 tools/check/check_layout_tables.py
 run modal-css    python3 tools/check/check_modal_css.py
 run layer-trim   python3 tools/check/test_layer_trim.py
 run cond-eval    python3 tools/check/test_cond_eval.py

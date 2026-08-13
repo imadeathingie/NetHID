@@ -156,7 +156,10 @@ void hid_init(void);
 void hid_task(void);
 
 // ── ASCII → HID lookup ───────────────────────────────────────────────────────
-typedef struct {
+/* Tagged so hid_layout.h can take one by pointer without including this file.
+ * nethid.h needs tusb.h in front of it (see check_includes.py); a header that
+ * pulled it in would quietly impose that on everyone who included it. */
+typedef struct ascii_hid_s {
     uint8_t modifier;
     uint8_t keycode;
 } ascii_hid_t;

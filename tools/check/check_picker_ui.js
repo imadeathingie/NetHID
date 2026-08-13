@@ -25,12 +25,15 @@ const fs = require('fs');
 
 const html = fs.readFileSync(process.argv[2], 'utf8');
 
-function makeInfo(features) {
+function makeInfo(features, layout) {
   const i = {
     ok: true, board: 'mystery6x6', rows: 6, cols: 6, layers: 4,
     compiled_layers: 2, encoders: 0, stored: false, dirty: false, saving: false,
   };
   if (features !== undefined) i.features = features;
+  // Omitted entirely for the "older firmware" case: no `layout` must mean US,
+  // which is what such a build was assuming anyway.
+  if (layout !== undefined) i.layout = layout;
   return i;
 }
 
@@ -54,7 +57,7 @@ function makeAutoclick(count) {
 
 async function run(label, features, checks, opts) {
   opts = opts || {};
-  const INFO = makeInfo(features);
+  const INFO = makeInfo(features, opts.layout);
   const AC = opts.autoclick === null ? null
            : makeAutoclick(opts.autoclick === undefined ? 3 : opts.autoclick);
   const posts = [];
@@ -101,7 +104,7 @@ async function run(label, features, checks, opts) {
   w.kmPickOpen(0, 0);
   const els = [...w.document.querySelectorAll('#kmList .km-opt')];
   const groups = [...w.document.querySelectorAll('#kmList .km-glabel')].map(h => h.textContent);
-  await checks({ w, opts: els, groups, names: els.map(b => b.textContent), posts, AC });
+  await checks({ w, opts: els, groups, names: els.map(b => b.dataset.kc), posts, AC });
   dom.window.close();
 }
 
@@ -121,10 +124,10 @@ async function run(label, features, checks, opts) {
       // Search must find it. This is precisely what failed before.
       const search = w.document.getElementById('kmSearch');
       search.value = 'click'; w.kmFilter();
-      const visible = opts.filter(b => b.style.display !== 'none').map(b => b.textContent);
+      const visible = opts.filter(b => b.style.display !== 'none').map(b => b.dataset.kc);
       ok(visible.includes('AUTO0'), 'searching "click" finds AUTO0');
       search.value = 'autoclick'; w.kmFilter();
-      ok(opts.filter(b => b.style.display !== 'none').map(b => b.textContent).includes('AUTO1'),
+      ok(opts.filter(b => b.style.display !== 'none').map(b => b.dataset.kc).includes('AUTO1'),
          'searching "autoclick" finds AUTO1');
 
       // Punctuation by the character it prints, not by its four-letter name.
@@ -132,7 +135,7 @@ async function run(label, features, checks, opts) {
       // name plus the group's keywords, and neither contains a ";".
       const seek = q => {
         search.value = q; w.kmFilter();
-        return opts.filter(b => b.style.display !== 'none').map(b => b.textContent);
+        return opts.filter(b => b.style.display !== 'none').map(b => b.dataset.kc);
       };
       const finds = (q, name) => ok(seek(q).includes(name),
         'searching ' + JSON.stringify(q) + ' finds ' + name);
@@ -174,6 +177,67 @@ async function run(label, features, checks, opts) {
       w.kmAdvSync();
       ok(w.kmAdvValue() === (0x5B00 | 1), 'AUTOCLK(1) encodes to 0x5B01');
     });
+
+  // ── UK layout ─────────────────────────────────────────────────────────────
+  // A usage is a position on the board, not a character. On UK, "the key that
+  // types @" is the apostrophe key and "the key that types a backslash" is one
+  // a US board does not have at all — so a picker that answers with the US key
+  // is not merely unhelpful, it is wrong.
+  await run('UK layout', undefined, ({ w, opts }) => {
+    const search = w.document.getElementById('kmSearch');
+    const seek = q => {
+      search.value = q; w.kmFilter();
+      return opts.filter(b => b.style.display !== 'none').map(b => b.dataset.kc);
+    };
+    const face = n => {
+      const b = opts.find(e => e.dataset.kc === n);
+      const f = b && b.querySelector('.km-face');
+      return f ? f.textContent : '';
+    };
+
+    const at = seek('@');
+    ok(at.includes('QUOT'), 'UK: "@" finds QUOT');
+    ok(!at.includes('2'), 'UK: "@" does not offer the 2 key');
+
+    const dq = seek('"');
+    ok(dq.includes('2'), 'UK: a double quote finds the 2 key');
+    ok(!dq.includes('QUOT'), 'UK: a double quote does not offer QUOT');
+
+    const bs = seek('\\');
+    ok(bs.includes('NUBS'), 'UK: a backslash finds NUBS');
+    ok(!bs.includes('BSLS'), 'UK: a backslash does not offer BSLS, which types #');
+
+    const hash = seek('#');
+    ok(hash.includes('NUHS'), 'UK: "#" finds NUHS');
+    ok(!hash.includes('3'), 'UK: "#" does not offer the 3 key');
+
+    ok(seek('£').includes('3'), 'UK: a pound sign finds the 3 key');
+    ok(seek('~').includes('NUHS'), 'UK: "~" finds NUHS');
+    ok(!seek('~').includes('GRV'), 'UK: "~" does not offer GRV, which types not-sign');
+
+    // Layout-independent keys must keep working, or the delta has replaced the
+    // table instead of being merged over it.
+    ok(seek(';').includes('SCLN'), 'UK: ";" still finds SCLN');
+    ok(seek('[').includes('LBRC'), 'UK: "[" still finds LBRC');
+
+    search.value = ''; w.kmFilter();
+    ok(face('QUOT') === '\' @', 'UK: QUOT is drawn as \' @');
+    ok(face('2') === '2 "', 'UK: the 2 key is drawn as 2 "');
+    ok(face('SCLN') === '; :', 'UK: SCLN keeps its US face');
+  }, { layout: 1 });
+
+  await run('US layout is unaffected', undefined, ({ w, opts }) => {
+    const search = w.document.getElementById('kmSearch');
+    const seek = q => {
+      search.value = q; w.kmFilter();
+      return opts.filter(b => b.style.display !== 'none').map(b => b.dataset.kc);
+    };
+    ok(seek('@').includes('2'), 'US: "@" finds the 2 key');
+    ok(seek('"').includes('QUOT'), 'US: a double quote finds QUOT');
+    ok(seek('\\').includes('BSLS'), 'US: a backslash finds BSLS');
+    ok(seek('#').includes('3'), 'US: "#" finds the 3 key');
+    search.value = ''; w.kmFilter();
+  }, { layout: 0 });
 
   // Features compiled out must not be silently offered.
   await run('board without consumer/mousekeys/autoclick',

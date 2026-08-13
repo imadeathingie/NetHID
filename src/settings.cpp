@@ -2,6 +2,7 @@
 
 #include "settings.h"
 #include "config.h"
+#include "hid_layout.h"   /* HID_LAYOUT_NAMES / _COUNT for the layout field */
 #include "pico/stdlib.h"
 #include "pico/multicore.h"
 #include "hardware/flash.h"
@@ -30,7 +31,7 @@
  * setting is one row here and one line of UI — there is no second place to
  * forget to update.
  */
-typedef enum { T_BOOL, T_U8, T_U16 } stype_t;
+typedef enum { T_BOOL, T_U8, T_U16, T_ENUM } stype_t;
 
 typedef struct {
     const char *name;
@@ -39,10 +40,16 @@ typedef struct {
     long        min, max;
     long        dflt;
     const char *help;
+    /* T_ENUM only: NULL-terminated names, index = value. The page renders a
+     * list of these instead of a number box, because "keyboard_layout: 1" is
+     * not a thing anyone can answer without reading the source. */
+    const char *const *opts;
 } sfield_t;
 
 #define F(name, type, member, mn, mx, df, help) \
-    { name, type, offsetof(settings_t, member), mn, mx, df, help },
+    { name, type, offsetof(settings_t, member), mn, mx, df, help, NULL },
+#define FE(name, member, mx, df, opts_, help) \
+    { name, T_ENUM, offsetof(settings_t, member), 0, mx, df, help, opts_ },
 
 static const sfield_t FIELDS[] = {
     F("quiet_boot",        T_BOOL, quiet_boot,        0, 1,     QUIET_BOOT,
@@ -63,8 +70,13 @@ static const sfield_t FIELDS[] = {
       "How long a dual-role key must be held to count as a hold")
     F("autoclick_ms",      T_U16,  autoclick_ms,       0, 5000, 0,
       "Autoclick interval in ms; 0 uses each key's own rate")
+    FE("keyboard_layout",  keyboard_layout, HID_LAYOUT_COUNT - 1, KEYBOARD_LAYOUT,
+       HID_LAYOUT_NAMES,
+       "Layout the HOST is set to; a wrong value mistypes at, hash, tilde, "
+       "quote, backslash and pipe")
 };
 #undef F
+#undef FE
 
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 static_assert(NFIELDS <= 32, "set_mask is 32 bits");
@@ -102,6 +114,7 @@ static void field_write(const sfield_t *f, long v) {
     uint8_t *base = (uint8_t *)&live + f->offset;
     switch (f->type) {
     case T_BOOL:
+    case T_ENUM:
     case T_U8:  *(uint8_t  *)base = (uint8_t)v;  break;
     case T_U16: *(uint16_t *)base = (uint16_t)v; break;
     }
@@ -111,6 +124,7 @@ static long field_read(const sfield_t *f) {
     const uint8_t *base = (const uint8_t *)&live + f->offset;
     switch (f->type) {
     case T_BOOL:
+    case T_ENUM:
     case T_U8:  return *(const uint8_t  *)base;
     case T_U16: return *(const uint16_t *)base;
     }
@@ -252,19 +266,35 @@ bool settings_dirty(void)        { return dirty; }
 int settings_to_json(char *buf, size_t cap) {
     int o = snprintf(buf, cap, "{\"ok\":true,\"dirty\":%s,\"fields\":[",
                      dirty ? "true" : "false");
+    int written = 0;
     for (int i = 0; i < NFIELDS; i++) {
         const sfield_t *f = &FIELDS[i];
-        if ((size_t)o > cap - 200) break;
+        if ((size_t)o > cap - 300) break;
         o += snprintf(buf + o, cap - o,
                       "%s{\"name\":\"%s\",\"type\":\"%s\",\"value\":%ld,"
                       "\"default\":%ld,\"min\":%ld,\"max\":%ld,"
-                      "\"overridden\":%s,\"help\":\"%s\"}",
+                      "\"overridden\":%s,\"help\":\"%s\"",
                       i ? "," : "", f->name,
-                      f->type == T_BOOL ? "bool" : "int",
+                      f->type == T_BOOL ? "bool" :
+                      f->type == T_ENUM ? "enum" : "int",
                       field_read(f), f->dflt, f->min, f->max,
                       (set_mask & (1u << i)) ? "true" : "false",
                       f->help);
+        if (f->type == T_ENUM && f->opts) {
+            o += snprintf(buf + o, cap - o, ",\"options\":[");
+            for (int k = 0; f->opts[k]; k++)
+                o += snprintf(buf + o, cap - o, "%s\"%s\"", k ? "," : "",
+                              f->opts[k]);
+            o += snprintf(buf + o, cap - o, "]");
+        }
+        o += snprintf(buf + o, cap - o, "}");
+        written++;
     }
-    o += snprintf(buf + o, cap - o, "]}");
+    /* Running out of buffer used to drop the remaining fields and still look
+     * like a complete, valid answer — the page would render nine settings and
+     * simply not have a tenth, with nothing anywhere saying why. Say so. */
+    o += snprintf(buf + o, cap - o, "],\"count\":%d,\"total\":%d,"
+                  "\"truncated\":%s}", written, NFIELDS,
+                  written < NFIELDS ? "true" : "false");
     return o;
 }

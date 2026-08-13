@@ -34,7 +34,7 @@
 
 /* Bump when the layout changes; a mismatch falls back to compiled defaults
  * rather than reinterpreting old bytes as new fields. */
-#define SETTINGS_VERSION 1
+#define SETTINGS_VERSION 2
 
 typedef struct {
     uint8_t  quiet_boot;         /* suppress boot diagnostics typed to the host */
@@ -44,7 +44,7 @@ typedef struct {
     uint16_t session_timeout_s;
     uint16_t lockout_s;
     uint8_t  max_auth_attempts;
-    uint8_t  reserved;
+    uint8_t  keyboard_layout;    /* hid_layout_t: which layout the HOST is set to */
     uint16_t tapping_term_ms;    /* dual-role hold threshold                     */
     uint16_t autoclick_ms;       /* 0 = use each slot's own interval             */
 } settings_t;

@@ -47,6 +47,7 @@
 #if ENABLE_SETTINGS
 #include "settings.h"
 #endif
+#include "hid_layout.h"   /* the keymap editor is told which layout to draw */
 #include "pico/stdlib.h"
 
 #include <string.h>
@@ -839,6 +840,15 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
             (unsigned)(KB_FEATURE_AUTOCLICK ? NUM_AUTOCLICKS : 0));
         JB_CLAMP(o);
 
+        // The layout the HOST is set to. The picker shows what each key PRINTS
+        // and lets you search for it, and "the key that types @" is a different
+        // key on US and UK — so the editor has to be told, exactly as the typer
+        // is. Both read the same setting; see include/hid_layout.h.
+        o += snprintf(jb + o, sizeof(jb) - o, ",\"layout\":%u,\"layout_name\":\"%s\"",
+                      (unsigned)hid_layout_active(),
+                      HID_LAYOUT_NAMES[hid_layout_active()]);
+        JB_CLAMP(o);
+
 #if SPLIT_ENABLE
         // The module table, so the editor can say which rows belong to which
         // physical board. Without it a modular keyboard is one undifferentiated
@@ -892,7 +902,7 @@ static void handle_request(net_pcb *pcb, const char *req, size_t len) {
     // renders whatever the firmware actually has rather than a hand-maintained
     // copy that drifts.
     if (strcmp(method, "GET") == 0 && strcmp(path, "/api/settings") == 0) {
-        static char jb[1800];
+        static char jb[2600];
         settings_to_json(jb, sizeof(jb));
         http_json(pcb, 200, jb);
         return;

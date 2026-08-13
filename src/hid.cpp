@@ -14,6 +14,7 @@
 #include "tusb.h"
 #include "nethid.h"
 #include "config.h"
+#include "hid_layout.h"
 #include "pico/stdlib.h"
 #include "pico/sync.h"
 #if ENABLE_KEYBOARD
@@ -186,6 +187,11 @@ bool hid_push_wakeup(void) {
 // ── ASCII → HID map ───────────────────────────────────────────────────────────
 
 bool ascii_to_hid(char c, ascii_hid_t *out) {
+    /* Everything below this line is US ANSI. Ask the active layout first, so a
+     * layout that moves a character gets to say so before the US table
+     * confidently answers with the wrong key. See include/hid_layout.h. */
+    if (hid_layout_override(hid_layout_active(), c, out)) return true;
+
     if (c >= 'a' && c <= 'z') { out->modifier = 0;          out->keycode = KEY_A + (c - 'a'); return true; }
     if (c >= 'A' && c <= 'Z') { out->modifier = MOD_LSHIFT; out->keycode = KEY_A + (c - 'A'); return true; }
     if (c >= '1' && c <= '9') { out->modifier = 0;          out->keycode = KEY_1 + (c - '1'); return true; }

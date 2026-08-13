@@ -11,6 +11,9 @@
  */
 const { JSDOM } = require('jsdom');
 const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.resolve(__dirname, '..', '..');
 
 const dom = new JSDOM(fs.readFileSync(process.argv[2], 'utf8'), {
   runScripts: 'dangerously',
@@ -21,7 +24,11 @@ const w = dom.window;
 
 setTimeout(async () => {
   const out = [];
-  const ck = (n, ok) => out.push((ok ? 'PASS  ' : 'FAIL  ') + n);
+  // `detail` is printed only on failure, for checks where knowing WHICH item
+  // disagreed is the difference between a fix and a hunt.
+  const ck = (n, ok, detail) =>
+    out.push((ok ? 'PASS  ' : 'FAIL  ') + n +
+             (!ok && detail ? '\n      ' + detail : ''));
   const tabs = () => w.document.querySelectorAll('#tabBar .tab').length;
   // Count keys in whichever view is showing. The fixtures carry geometry, so
   // the editor correctly defaults to the physical layout and #kmGrid is empty —
@@ -61,10 +68,38 @@ setTimeout(async () => {
     ck('taking a module offline surfaces a warning',
        !warn.hidden && /not answering/.test(warn.textContent));
 
-    // The settings tab renders from the mock's field table.
+    // The settings tab renders from the mock's field table — one row per
+    // field, so a field the mock forgot is a control the preview silently
+    // cannot exercise. Counted from the mock rather than hard-coded, or adding
+    // a setting means editing a number here for no reason.
     await w.stLoad();
+    const mockFields = w.mock.state.settings.fields;
     ck('settings render from the mock',
-       w.document.querySelectorAll('#stList .st-row').length === 8);
+       w.document.querySelectorAll('#stList .st-row').length === mockFields.length);
+
+    // And the mock's list must be the firmware's list. autoclick_ms was in
+    // settings.cpp and absent here, so the preview had been quietly missing a
+    // setting for as long as it had existed.
+    const fieldsC = fs.readFileSync(ROOT + '/src/settings.cpp', 'utf8');
+    const tbl = fieldsC.match(/static const sfield_t FIELDS\[\] = \{([\s\S]*?)\n\};/);
+    const real = tbl ? [...tbl[1].matchAll(/^\s*FE?\("(\w+)"/gm)].map(m => m[1]) : [];
+    ck('mock models every setting the firmware has',
+       real.length > 0 && real.join(',') === mockFields.map(f => f.name).join(','),
+       'firmware: ' + real.join(',') + '\n      mock:     ' +
+       mockFields.map(f => f.name).join(','));
+
+    // An enum field must arrive with names, or the page falls back to a number
+    // box and asks the user what "1" means.
+    const en = mockFields.filter(f => f.type === 'enum');
+    ck('enum settings render as a list of names',
+       en.length > 0 && en.every(f => Array.isArray(f.options) && f.options.length) &&
+       en.every(f => {
+         const row = [...w.document.querySelectorAll('#stList .st-row')]
+           .find(r => r.querySelector('.st-name').textContent === f.name);
+         const sel = row && row.querySelector('select');
+         return sel && sel.options.length === f.options.length &&
+                sel.value === String(f.value);
+       }));
 
     await w.wfLoad();
     ck('wifi list renders from the mock',

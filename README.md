@@ -525,6 +525,14 @@ timeouts — persisted to flash, available in both normal and setup mode. See
 **[docs/SETTINGS.md](docs/SETTINGS.md)**, including what is deliberately left
 compile-time and why.
 
+`keyboard_layout` is there too, and matters more than it looks. A HID usage is
+a *position* on the board, not a character, so the device has to assume a
+layout before it can type an `@` — and it cannot detect one, because USB never
+carries it. Set to **UK** and the typer stops sending the US positions for
+`@ " # ~ \ |`, which on a British host produce a different character in each
+case. The keymap editor reads the same setting: each key in the picker shows
+what it prints, and you can search by that character rather than by name.
+
 The **login password** can be changed from the device, under the header cog, so
 it does not need to live only in `env.h`. Because a keyboard has no reset hole,
 the stored password is tagged with the build id of the firmware that wrote it

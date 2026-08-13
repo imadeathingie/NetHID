@@ -146,10 +146,17 @@
     }
   }
 
+  // Field names and types must match FIELDS in src/settings.cpp — the page is
+  // generated from this shape, so a field missing here is a control the
+  // preview cannot exercise at all. check_preview.js holds the two lists in
+  // step; autoclick_ms had already gone missing before it did.
   function defaultSettings() {
-    const f = (name, type, value, dflt, min, max, help) =>
-      ({ name, type, value, default: dflt, min, max, overridden: value !== dflt, help });
-    return { ok: true, dirty: false, fields: [
+    const f = (name, type, value, dflt, min, max, help, options) =>
+      ({ name, type, value, default: dflt, min, max,
+         overridden: value !== dflt, help,
+         ...(options ? { options } : {}) });
+    return { ok: true, dirty: false, truncated: false, count: 10, total: 10,
+      fields: [
       f('quiet_boot','bool',0,0,0,1,'Stop typing boot diagnostics into the host'),
       f('debug_matrix','bool',0,0,0,1,'Log every matrix edge to the serial console'),
       f('type_delay_ms','int',8,8,0,100,'Delay between typed characters'),
@@ -158,6 +165,10 @@
       f('lockout_s','int',30,30,5,3600,'Lockout after too many failed logins'),
       f('max_auth_attempts','int',5,5,1,50,'Failed logins before the lockout applies'),
       f('tapping_term_ms','int',185,200,50,1000,'How long a dual-role key must be held'),
+      f('autoclick_ms','int',0,0,0,5000,'Autoclick interval in ms; 0 uses each key\'s own rate'),
+      f('keyboard_layout','enum',0,0,0,1,
+        'Layout the HOST is set to; a wrong value mistypes at, hash, tilde, quote, backslash and pipe',
+        ['US','UK']),
     ]};
   }
 
@@ -201,6 +212,13 @@
     // report — the exact confusion this object exists to remove.
     if (fx.features) o.features = fx.features;
     if (fx.modules) o.modules = fx.modules;
+    // Which layout the picker draws and searches by. Read from the settings
+    // store, exactly as the firmware does, so changing it on the settings tab
+    // changes the picker in the preview too.
+    const kl = state.settings &&
+               state.settings.fields.find(x => x.name === 'keyboard_layout');
+    o.layout = kl ? kl.value : 0;
+    o.layout_name = ['US','UK'][o.layout] || 'US';
     return o;
   }
 
